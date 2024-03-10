@@ -86,6 +86,7 @@ int main(int argc, char** argv) {
     exit(EXIT_FAILURE);
   }
   int maxStep = atoi(argv[1]);
+  printf("maxstep: %d\n", maxStep);
   rstream rs = makeRStream();
   grstream grs = makeGRStream();
   ph::Input ctrl;
@@ -118,8 +119,6 @@ int main(int argc, char** argv) {
     ctrl.rs = rs;
     if(!PCU_Comm_Self())
       fprintf(stderr, "STATUS ran to step %d\n", step);
-    if( step >= maxStep )
-      break;
     setupChef(ctrl,step);
     chef::readAndAttachFields(ctrl,m);
     /* perform mesh mover + improver + adapter */
@@ -130,6 +129,8 @@ int main(int argc, char** argv) {
     if(!PCU_Comm_Self())
       printf("data transfer+model update+mesh modification in %f seconds\n",t1 - t0);
   } while( step < maxStep );
+
+  pc::writeSequence(m, step, "pvtu_mesh_final_");
   destroyGRStream(grs);
   destroyRStream(rs);
   freeMesh(m);
