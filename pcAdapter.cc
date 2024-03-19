@@ -1511,4 +1511,147 @@ namespace pc {
     m->verify();
   }
 
+  /**
+   * @brief Generate averaged vertex pressure gradient field from region field.
+   * @param m APF mesh.
+   * @input-field "P_Filt" VECTOR
+   * @working-field "pc_spf_num_rgns"
+   * @output-field "PG_avg" VECTOR
+   * @return A pointer to the "PG_avg" field.
+   */
+  apf::Field* smoothP_Filt(apf::Mesh2* m) {
+    // Setup fields.
+    apf::Field* P_Filt = m->findField("P_Filt");
+    apf::Field* num_rgns = apf::createFieldOn(m, "pc_spf_num_rgns", apf::SCALAR);
+    apf::Field* PG_avg = apf::createFieldOn(m, "PG_avg", apf::VECTOR);
+
+    // Iterate through every vertex.
+    apf::MeshIterator* it = m->begin(0);
+    for (apf::MeshEntity* v = m->iterate(it); v; v = m->iterate(it)) {
+      apf::Vector3 pg_sum;
+      apf::Adjacent adja;
+      m->getAdjacent(v, 3, adja);
+
+      // Sum P_Filt for owned adjacent regions.
+      int adjacent_owned = 0;
+      for (int i = 0; i < adja.size(); ++i) {
+        if (m->isOwned(adja[i])) {
+          apf::Vector3 p;
+          apf::getVector(P_Filt, adja[i], 0, p);
+          pg_sum += p;
+          ++adjacent_owned;
+        }
+      }
+
+      apf::setVector(PG_avg, v, 0, pg_sum);
+      apf::setScalar(num_rgns, v, 0, adjacent_owned);
+    }
+    m->end(it);
+
+    // Accumulate sums along partition boundary.
+    apf::accumulate(PG_avg);
+    apf::accumulate(num_rgns);
+
+    // Calculate averages.
+    it = m->begin(0);
+    for (apf::MeshEntity* v = m->iterate(it); v; v = m->iterate(it)) {
+      apf::Vector3 pg_sum;
+      double count;
+      apf::getVector(PG_avg, v, 0, pg_sum);
+      apf::getScalar(num_rgns, v, 0, count);
+
+      apf::setVector(PG_avg, v, 0, pg_sum / count);
+    }
+    m->end(it);
+
+    // No need to re-synchronize because all part boundaries have the same field
+    // data.
+
+    // Clean up intermediate fields.
+    apf::destroyField(num_rgns);
+
+    return PG_avg
+  }
+
+
+  /**
+   * @brief Detect shocks on a mesh using normal mach number with pressure gradient filtering.
+   * 
+   * Lovely and Haimes.
+   * 
+   * @param in PHASTA input config.
+   * @param m APF mesh.
+   * @input-field "P_Filt"
+   * @working-field "PG_avg"
+   * @working-field "shk_det"
+   * @working-field "num_elms"
+   * @output-field "Shock_Param"
+   * @output-field "Shock_ID"
+   * @output-field "plan_val"
+   */
+  void detectShocksSerial(const ph::Input& in, apf::Mesh2* m) {
+    apf::Field* PG_avg = smoothP_Filt(m);
+
+    // Calculate normal mach number.
+
+    // Get pressure filtering and VMS filtering values.
+
+    // Do filtering
+  }
+
+  void defragmentShocksSerial(const ph::Input& in, apf::Mesh2* m);
+  void connectShocksSerial(const ph::Input& in, apf::Mesh2* m);
+  void denoiseShocksSerial(const ph::Input& in, apf::Mesh2* m);
+  void divideShockSystemsSerial(const ph::Input& in, apf::Mesh2* m);
+  void setupSizeField(const ph::Input& in, apf::Mesh2* m, apf::Field* szFld);
+
+  /**
+   * @brief Run mesh adaptation.
+   * 
+   * @param in PHASTA input config.
+   * @param m APF mesh.
+   * @param szFld Size field.
+   * @param step Current execution step.
+   * @input-field "Shock_Ind"
+   * @input-field "P_Filt"
+   * @working-field ""
+   */
+  void runMeshAdapterSerial(const ph::Input& in, apf::Mesh2* m, apf::Field* szFld, int step) {
+    PCU_ALWAYS_ASSERT(PCU_Comm_Peers() == 1);
+    m->verify();
+
+    // 0. Detect shock using normal mach number.
+    detectShocksSerial(in, m);
+
+    // 1. Gaps and fragments.
+    // 1.a. Breadth-first search radius 3 or 5 neighbors.
+    defragmentShocksSerial(in, m);
+
+    // 2. Component connection (breadth first search).
+    // 2.a. OK to connect distinct shock systems.
+    connectShocksSerial(in, m);
+
+    // 3. Filter components to remove noise (systems with <10 elements).
+    denoiseShocksSerial(in, m);
+
+    // 4. Divide shock systems with planarity.
+    if (in.shockIDSegment) {
+      divideShockSystemsSerial(in, m);
+    }
+
+    // 5. Extension and intersection.
+
+
+    // 6. Size-field.
+    setupSizeField(in, m, szFld);
+    if (in.simmetrixMesh == 1) {
+      setupSimAdapter(...);
+      // run adapter, improver, etc.
+    } else {
+      chef::adapt(m, szFld, in);
+      chef::balance(in, m);
+    }
+
+    m->verify();
+  }
 }
