@@ -1581,6 +1581,187 @@ namespace pc {
     return PG_avg
   }
 
+  /**
+   * @brief Calculate normal mach number for mesh m.
+   * 
+   * @param m APF Mesh.
+   * @input-field "PG_avg"
+   * @input-field "solution"
+   * @input-field "time derivative of solution"
+   * @output-field "shk_det" (SCALAR)
+   * @return A pointer to the shk_det Field.
+   */
+  apf::Field* calcNormalMach(apf::Mesh* m) {
+    apf::Field* PG_avg = m->findField("PG_avg");
+    apf::Field* sol = m->findField("solution");
+    apf::Field* td_sol = m->findField("time derivative of solution");
+    apf::Field* shk_det = apf::createFieldOn(m, "shk_det", apf::SCALAR);
+
+    apf::Vector3 pg_avg;
+    apf::NewArray<double> sol_tmp(apf::countComponents(sol));
+    apf::NewArray<double> td_sol_tmp(apf::countComponents(td_sol));
+
+    apf::MeshIterator it = m->begin(0);
+    for (apf::MeshEntity* v = m->iterate(it); v; v = m->iterate(it)) {
+      apf::getVector(PG_avg, v, 0, pg_avg);
+      apf::getComponents(sol, v, 0, sol_tmp.begin());
+      apf::getComponents(td_sol, v, 0, td_sol_tmp.begin());
+
+      apf::Vector3 sol_v(sol_tmp.begin() + 1);
+
+      double a = sqrt(1.4*287 * sol_tmp[4]); // = speed of sound = sqrt(gamma*R)
+      double mach_n = (td_sol_tmp[0]/a + sol_v * pg_avg)/pg_avg.getLength();
+
+      apf::setScalar(shk_det, v, 0, mach_n);
+    }
+    m->end(it);
+
+    return shk_det;
+  }
+
+  /**
+   * @brief ShockFilter is a class that handles reading of Shock.inp files and
+   * filtering data based on those inputs.
+   */
+	class ShockFilter {
+	public:
+		static ShockFilter ReadFile(const char* ShockInp);
+
+    /**
+     * @brief Filter a pressure value using input bounds.
+     * 
+     * @param P A pressure value to test.
+     * @return true if P is in bounds.
+     */
+    bool filterPressure(double P) const noexcept {
+      return P_min <= P && P <= P_max;
+    }
+
+    /**
+     * @brief Filter a VMS error value using input bounds.
+     * 
+     * @param VMS A VMS error to test.
+     * @return true if VMS is in bounds.
+     */
+    bool filterVMS(double VMS) const noexcept {
+      return VMS_min <= VMS && VMS <= VMS_max;
+    }
+
+	private:
+		ShockFilter(double pmin, double pmax, double vmin, double vmax):
+				P_min(pmin), P_max(pmax), VMS_min(vmin), VMS_max(vmax) {}
+
+		ShockFilter(): ShockFilter(0, HUGE_VAL, 0, HUGE_VAL0) {}
+
+		// Pressure thresholds.
+		double P_min, P_max;
+
+		// VMS error thresholds.
+		double VMS_min, VMS_max;
+	};
+
+	/**
+   * @brief Read Shock.inp file.
+   * 
+   * @param ShockInp The filename to parse. Usually "Shock.inp".
+   * @return ShockFilter A newly constructed ShockFilter.
+   */
+  ShockFilter ShockFilter::ReadFile(const char* ShockInp) {
+    ShockFilter sf;
+
+		std::ifstream in_str("Shock.inp");
+		if (in_str.good()) {
+			std::string word;
+			while (in_str >> word) {
+				if (word == "P_thres_max") {
+					in_str >> sf.P_max;
+				} else if (word == "P_thres_min") {
+					in_str >> sf.P_min;
+				} else if (parse == "VMS_thres_max") {
+					in_str >> sf.VMS_max;
+				} else if (parse == "VMS_thres_min") {
+					in_str >> sf.VMS_min;
+				}
+			}
+		} else {
+			if (!PCU_Comm_Self()) {
+				std::cerr << "ERROR: failed to open " << ShockInp
+									<< "Falling back to defaults." << std::endl;
+			}
+		}
+
+		return sf;
+	}
+
+  /**
+   * @brief Mark elements as shock based on normal mach = 1 in adjacent edge.
+   * 
+   * 1-mach line is detected in edges by IVT then propogated to all adjacent
+   * elements.
+   * 
+   * @param m An apf::Mesh.
+   * @param shk_det The input field with normal mach numbers.
+   * @param Shock_Param The output field for shock indicators.
+   */
+  void locateShockLine(apf::Mesh* m, apf::Field* shk_det, apf::Field* Shock_Param) {
+    // Iterate over edges.
+    apf::MeshIterator* it = m->begin(1);
+    for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
+      apf::Downward down;
+      m->getDownward(e, 0, down);
+      double M0 = apf::getScalar(shk_det, down[0], 0);
+      double M1 = apf::getScalar(shk_det, down[1], 0);
+
+      // Intermediate Value Theorem. Shock line of 1 on an edge indicates shock
+      // in the surrounding elements (regions).
+      /* FIXME: Some potential for numerical error (subtracting close values)
+       * but the sign should remain correct. */
+      if ((M0 - 1) * (M1 - 1) < 0) {
+        apf::Adjacent adja;
+        m->getAdjacent(e, 3, adja);
+        for (size_t i = 0; i < adja.size(); ++i) {
+          apf::setScalar(Shock_Param, adja[i], 0, 1);
+        }
+      }
+    }
+    m->end(it);
+
+    // Propogate Shock_Param along mesh partition boundary.
+    apf::Sharing* sharing = apf::getSharing(m);
+    apf::sharedReduction(Shock_Param, sharing, false,
+                         apf::ReductionMax<double>());
+  }
+
+  /**
+   * @brief Filter Shock_Param indicator via pressure residual and VMS error
+   * magnitude.
+   * 
+   * @param m An apf::Mesh.
+   * @param Shock_Param The Shock_Param field to filter.
+   * @param filt ShockFilter inputs.
+   * @input-field "P_Filt"
+   * @input-field "VMS_error"
+   */
+  void filterShockParam(apf::Mesh* m, apf::Field* Shock_Param, const ShockFilter& filt) {
+    apf::Field* P_Filt = m->findField("P_Filt");
+    apf::Field* VMS_error = m->findField("VMS_error");
+
+    // P_Filt and VMS_error are 8*real in the Fortran code.
+    apf::NewArray<double> p(apf::countComponents(P_Filt));
+    apf::NewArray<double> vms(apf::countComponents(VMS_error));
+
+    apf::MeshIterator it = m->begin(3);
+    for (apf::MeshEntity* e = m->iterate(it); e; m->iterate(it)) {
+      apf::Vector3 vms_v(vms.begin() + 1);
+      if (!(filt.filterPressure(p[3]) && filt.filterVMS(vms_v.getLength()))) {
+        apf::setScalar(Shock_Param, e, 0, 0);
+      }
+    }
+    m->end(it);
+
+    // We only operate on individual elements. Given field data is synchronized,
+    // partition boundaries stay synchronized.
+  }
 
   /**
    * @brief Detect shocks on a mesh using normal mach number with pressure gradient filtering.
@@ -1588,11 +1769,11 @@ namespace pc {
    * Lovely and Haimes.
    * 
    * @param in PHASTA input config.
-   * @param m APF mesh.
+   * @param m An apf::Mesh.
    * @input-field "P_Filt"
    * @working-field "PG_avg"
-   * @working-field "shk_det"
    * @working-field "num_elms"
+   * @working-field "shk_det"
    * @output-field "Shock_Param"
    * @output-field "Shock_ID"
    * @output-field "plan_val"
@@ -1601,10 +1782,17 @@ namespace pc {
     apf::Field* PG_avg = smoothP_Filt(m);
 
     // Calculate normal mach number.
+    apf::Field* shk_det = calcNormalMach(m);
 
-    // Get pressure filtering and VMS filtering values.
+    // Shock_Param is a scalar indicator (1 or 0) field on 3D elements.
+    apf::Field* Shock_Param = apf::CreateField(m, "Shock_Param", apf::SCALAR,
+                                               apf::getConstant(3));
 
-    // Do filtering
+    // Find shock line using IVT for edges.
+    locateShockLine(m, shk_det, Shock_Param);
+
+    // Filter Shock_Param using pressure/vms error.
+    filterShockParam(m, Shock_Param, ShockFilter::ReadFile("Shock.inp"));
   }
 
   void defragmentShocksSerial(const ph::Input& in, apf::Mesh2* m);
