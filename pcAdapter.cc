@@ -1520,10 +1520,17 @@ namespace pc {
    * @return A pointer to the "PG_avg" field.
    */
   apf::Field* smoothP_Filt(apf::Mesh2* m) {
-    // Setup fields.
+    // Get input field.
     apf::Field* P_Filt = m->findField("P_Filt");
+
+    // Create working field.
     apf::Field* num_rgns = apf::createFieldOn(m, "pc_spf_num_rgns", apf::SCALAR);
+
+    // Create output field.
     apf::Field* PG_avg = apf::createFieldOn(m, "PG_avg", apf::VECTOR);
+
+    // P_Filt is currently a 8-component field, but this may change.
+    apf::NewArray<double> p_filt_val(apf::countComponents(P_Filt));
 
     // Iterate through every vertex.
     apf::MeshIterator* it = m->begin(0);
@@ -1536,9 +1543,10 @@ namespace pc {
       int adjacent_owned = 0;
       for (int i = 0; i < adja.size(); ++i) {
         if (m->isOwned(adja[i])) {
-          apf::Vector3 p;
-          apf::getVector(P_Filt, adja[i], 0, p);
-          pg_sum += p;
+          apf::getComponents(P_Filt, adja[i], 0, p_filt_val.begin());
+
+          // Although P_Filt has 8 components, we only need the first 3.
+          pg_sum += apf::Vector3(p_filt_val[0], p_filt_val[1], p_filt_val[2]);
           ++adjacent_owned;
         }
       }
