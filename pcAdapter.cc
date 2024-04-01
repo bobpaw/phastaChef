@@ -1628,22 +1628,22 @@ namespace pc {
 		static ShockFilter ReadFile(const char* ShockInp);
 
     /**
-     * @brief Filter a pressure value using input bounds.
+     * @brief Check if a pressure value is within input bounds.
      * 
      * @param P A pressure value to test.
      * @return true if P is in bounds.
      */
-    bool filterPressure(double P) const noexcept {
+    bool checkPressure(double P) const noexcept {
       return P_min <= P && P <= P_max;
     }
 
     /**
-     * @brief Filter a VMS error value using input bounds.
+     * @brief Check if a VMS error value is within input bounds.
      * 
      * @param VMS A VMS error to test.
      * @return true if VMS is in bounds.
      */
-    bool filterVMS(double VMS) const noexcept {
+    bool checkVMS(double VMS) const noexcept {
       return VMS_min <= VMS && VMS <= VMS_max;
     }
 
@@ -1703,7 +1703,7 @@ namespace pc {
    * @param shk_det The input field with normal mach numbers.
    * @param Shock_Param The output field for shock indicators.
    */
-  void locateShockLine(apf::Mesh* m, apf::Field* shk_det, apf::Field* Shock_Param) {
+  void locateShockEdges(apf::Mesh* m, apf::Field* shk_det, apf::Field* Shock_Param) {
     // Iterate over edges.
     apf::MeshIterator* it = m->begin(1);
     for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
@@ -1712,11 +1712,12 @@ namespace pc {
       double M0 = apf::getScalar(shk_det, down[0], 0);
       double M1 = apf::getScalar(shk_det, down[1], 0);
 
+      double target_mach_n = 1;
       // Intermediate Value Theorem. Shock line of 1 on an edge indicates shock
       // in the surrounding elements (regions).
       /* FIXME: Some potential for numerical error (subtracting close values)
        * but the sign should remain correct. */
-      if ((M0 - 1) * (M1 - 1) < 0) {
+      if ((M0 - target_mach_n) * (M1 - target_mach_n) < 0) {
         apf::Adjacent adja;
         m->getAdjacent(e, 3, adja);
         for (size_t i = 0; i < adja.size(); ++i) {
@@ -1753,7 +1754,7 @@ namespace pc {
     apf::MeshIterator it = m->begin(3);
     for (apf::MeshEntity* e = m->iterate(it); e; m->iterate(it)) {
       apf::Vector3 vms_v(vms.begin() + 1);
-      if (!(filt.filterPressure(p[3]) && filt.filterVMS(vms_v.getLength()))) {
+      if (!(filt.checkPressure(p[3]) && filt.checkVMS(vms_v.getLength()))) {
         apf::setScalar(Shock_Param, e, 0, 0);
       }
     }
@@ -1789,7 +1790,7 @@ namespace pc {
                                                apf::getConstant(3));
 
     // Find shock line using IVT for edges.
-    locateShockLine(m, shk_det, Shock_Param);
+    locateShockEdges(m, shk_det, Shock_Param);
 
     // Filter Shock_Param using pressure/vms error.
     filterShockParam(m, Shock_Param, ShockFilter::ReadFile("Shock.inp"));
@@ -1808,7 +1809,6 @@ namespace pc {
    * @param m APF mesh.
    * @param szFld Size field.
    * @param step Current execution step.
-   * @input-field "Shock_Ind"
    * @input-field "P_Filt"
    * @working-field ""
    */
