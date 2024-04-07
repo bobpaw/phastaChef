@@ -1799,21 +1799,6 @@ namespace pc {
     apf::destroyField(shk_det);
   }
 
-  /**
-   * @brief Connect fragmented shock elements. Breadth-first search stopping at
-   * after 3 neighbors.
-   * 
-   * @param m APF Mesh.
-   * @input-field "Shock_Param"
-   * @output-field "Shock_Param"
-   */
-  void defragmentShocksSerial(apf::Mesh2* m) {
-    // for each element:
-    // - if no adjacent neighbors are shock, do BFS.
-    // - if majority of
-    // spacing = 0.1
-  }
-
   using BFScheck = std::function<bool(apf::Mesh* m, apf::MeshEntity* c, apf::MeshEntity* e)>;
   using BFSaction = std::function<void(apf::Mesh* m, apf::MeshEntity* e, int component, int distance)>;
 
@@ -1854,6 +1839,21 @@ namespace pc {
 
       ++component;
     }
+  }
+
+  /**
+   * @brief Connect fragmented shock elements. Breadth-first search stopping at
+   * after 3 neighbors.
+   * 
+   * @param m APF Mesh.
+   * @input-field "Shock_Param"
+   * @output-field "Shock_Param"
+   */
+  void defragmentShocksSerial(apf::Mesh2* m) {
+    // for each element:
+    // - if no adjacent neighbors are shock, do BFS.
+    // - if majority of
+    // spacing = 0.1
   }
 
   /**
