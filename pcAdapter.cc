@@ -1865,7 +1865,7 @@ namespace pc {
    * @working-field "pc_cs_bfs"
    * @output-field "Shock_Param"
    */
-  void connectShocksSerial(const ph::Input& in, apf::Mesh2* m) {
+  void labelShocksSerial(const ph::Input& in, apf::Mesh2* m) {
     // Do BFS
 
     // Get input field.
@@ -1900,7 +1900,7 @@ namespace pc {
   }
 
   void denoiseShocksSerial(const ph::Input& in, apf::Mesh2* m);
-  void divideShockSystemsSerial(const ph::Input& in, apf::Mesh2* m);
+  void segmentShocksSerial(const ph::Input& in, apf::Mesh2* m);
   void setupSizeField(const ph::Input& in, apf::Mesh2* m, apf::Field* szFld);
 
   /**
@@ -1926,14 +1926,14 @@ namespace pc {
 
     // 2. Component connection (breadth first search).
     // 2.a. OK to connect distinct shock systems.
-    connectShocksSerial(in, m);
+    labelShocksSerial(in, m);
 
     // 3. Filter components to remove noise (systems with <10 elements).
     denoiseShocksSerial(in, m);
 
     // 4. Divide shock systems with planarity.
     if (in.shockIDSegment) {
-      divideShockSystemsSerial(in, m);
+      segmentShocksSerial(in, m);
     }
 
     // 5. Extension and intersection.
