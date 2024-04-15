@@ -1352,6 +1352,17 @@ namespace pc {
     m->verify();
   }
 
+  class ShockParam {
+  public:
+    static constexpr double NONE = 0;
+    static constexpr double SHOCK = 1;
+    static constexpr double FRAGMENT = 2;
+
+  private:
+    // Static only class has private constructor.
+    ShockParam();
+  };
+
   /**
    * @brief Generate averaged vertex pressure gradient field from region field.
    * @param m APF mesh.
@@ -1561,7 +1572,7 @@ namespace pc {
         apf::Adjacent adja;
         m->getAdjacent(e, 3, adja);
         for (size_t i = 0; i < adja.size(); ++i) {
-          apf::setScalar(Shock_Param, adja[i], 0, 1);
+          apf::setScalar(Shock_Param, adja[i], 0, ShockParam::SHOCK);
         }
       }
     }
@@ -1595,7 +1606,7 @@ namespace pc {
     for (apf::MeshEntity* e = m->iterate(it); e; m->iterate(it)) {
       apf::Vector3 vms_v(vms.begin() + 1);
       if (!(filt.checkPressure(p[3]) && filt.checkVMS(vms_v.getLength()))) {
-        apf::setScalar(Shock_Param, e, 0, 0);
+        apf::setScalar(Shock_Param, e, 0, ShockParam::NONE);
       }
     }
     m->end(it);
@@ -1638,14 +1649,22 @@ namespace pc {
     apf::destroyField(shk_det);
   }
 
-  using BFScheck = std::function<bool(apf::Mesh* m, apf::MeshEntity* c, apf::MeshEntity* e)>;
-  using BFSaction = std::function<void(apf::Mesh* m, apf::MeshEntity* e, int component, int distance)>;
+	struct BFSarg {
+		apf::Mesh* m;
+		apf::MeshEntity* c; // First element for this BFS loop.
+    apf::MeshEntity* e; // Current element.
+		int component, distance;
+	};
 
-  void serialBFS(apf::Mesh* m, int dimension, BFScheck check, BFSaction action) {
+	using BFScheck = std::function<bool(const BFSarg& arg)>;
+	using BFSaction = std::function<void(const BFSarg& arg)>;
+
+	void serialBFS(apf::Mesh* m, int dimension, BFScheck check, BFSaction action) {
     int bridgeDimension = 0;
     if (dimension == 0) bridgeDimension = 1;
 
     std::set<apf::MeshEntity*> visited;
+    BFSarg arg = (BFSarg){m, nullptr, nullptr, 0, 0};
 
     int component = 0;
     apf::MeshIterator *it = m->begin(dimension);
@@ -1653,13 +1672,17 @@ namespace pc {
       int distance = 0;
       std::queue<apf::MeshEntity*> Q, Q_next;
 
+      arg.c = e;
       Q.push(e);
       visited.insert(e);
 
       // BFS loop.
       for (; !Q.empty(); Q.pop()) {
-        if (check(m, e, Q.front())) {
-          action(m, e, component, distance);
+        arg.e = Q.front();
+        arg.component = component;
+        arg.distance = distance;
+        if (check(arg)) {
+          action(arg);
 
           apf::Adjacent neighbors;
           apf::getBridgeAdjacent(m, Q.front(), bridgeDimension, dimension, neighbors);
@@ -1681,19 +1704,38 @@ namespace pc {
   }
 
   /**
-   * @brief Connect fragmented shock elements. Breadth-first search stopping at
-   * after 3 neighbors.
+   * @brief Fuzzily defragment shock elements. Mark elements neighboring shock
+   * elements as shock.
    * 
    * @param m APF Mesh.
    * @input-field "Shock_Param"
    * @output-field "Shock_Param"
    */
-  void defragmentShocksSerial(apf::Mesh2* m) {
-    // for each element:
-    // - if no adjacent neighbors are shock, do BFS.
-    // - if majority of
-    // spacing = 0.1
+  void defragmentShocksSerial(const ph::Input& in, apf::Mesh2* m) {
+    // max linear search distance.
+    double dist_max = 0.1;
+    // TODO: Replace spacing with a factor against element size (sphere).
+    
+    apf::Field* Shock_Param = m->findField("Shock_Param");
+
+    apf::MeshIterator* it = m->begin(3);
+    for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
+        serialBFS(m, 3, [dist_max](const BFSarg& arg) -> bool {
+          if (arg.component > 0) return false; // Only do one iteration.
+          apf::Vector3 e_lc = apf::getLinearCentroid(arg.m, arg.e);
+          apf::Vector3 c_lc = apf::getLinearCentroid(arg.m, arg.c);
+          apf::Vector3 dist =  e_lc - c_lc;
+          // Only process elements within spacing distance.
+          return dist * dist < dist_max * dist_max;
+        }, [Shock_Param](const BFSarg& arg){
+          if (apf::getScalar(Shock_Param, arg.e, 0) != ShockParam::SHOCK) {
+            apf::setScalar(Shock_Param, arg.e, 0, ShockParam::FRAGMENT);
+          }
+        });
+    }
   }
+
+  using Shocks = std::vector<std::vector<apf::MeshEntity*>>;
 
   /**
    * @brief Connect shock components.
@@ -1703,43 +1745,76 @@ namespace pc {
    * @input-field "Shock_Param" Shock indicator field. 1 or 0.
    * @working-field "pc_cs_bfs"
    * @output-field "Shock_Param"
+   * @return An array of labeled shocks.
    */
-  void labelShocksSerial(const ph::Input& in, apf::Mesh2* m) {
-    // Do BFS
+	Shocks labelShocksSerial(const ph::Input& in, apf::Mesh2* m) {
+		// Get input field.
+		apf::Field* Shock_Param = m->findField("Shock_Param");
 
-    // Get input field.
-    apf::Field* Shock_Param = m->findField("Shock_Param");
+		// Idea: each value is a (PCU_Rank, Component ID, distance) triplet.
+		apf::Field* pc_cs_bfs =
+				apf::createField(m, "pc_cs_bfs", apf::VECTOR, apf::getConstant(3));
 
-    // Idea: each value is a (PCU_Rank, Component ID, distance) triplet.
-    apf::Field* pc_cs_bfs = apf::createField(m, "pc_cs_bfs", apf::VECTOR,
-                                             apf::getConstant(3));
-    
-    // Initialize BFS field.
-    apf::MeshIterator* it = m->begin(3);
-    for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
-      apf::Vector3 bfs_trip(-1, -1, std::numeric_limits<double>::infinity());
-      apf::setVector(pc_cs_bfs, e, 0, bfs_trip);
-    }
-    m->end(it);
+		// Initialize BFS field.
+		apf::MeshIterator* it = m->begin(3);
+		for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
+			apf::Vector3 bfs_trip(-1, -1, std::numeric_limits<double>::infinity());
+			apf::setVector(pc_cs_bfs, e, 0, bfs_trip);
+		}
+		m->end(it);
 
-    serialBFS(m, 3, [Shock_Param, pc_cs_bfs](apf::Mesh* m, apf::MeshEntity* c, apf::MeshEntity* e) {
-      apf::Vector3 v;
-      apf::getVector(pc_cs_bfs, e, 0, v);
-      return apf::getScalar(Shock_Param, e, 0) == 1 && v.y() < 0;
-    }, [pc_cs_bfs](apf::Mesh* m, apf::MeshEntity* e, int c, int d) {
-      apf::Vector3 v;
-      apf::getVector(pc_cs_bfs, e, 0, v);
-      v.x() = PCU_Comm_Self();
-      v.y() = c;
-      v.z() = d;
-      apf::setVector(pc_cs_bfs, e, 0, v);
-    });
+		Shocks shocks;
 
-    // FIXME: Process part boundary (repeated triplet max.)
-  }
+		serialBFS(
+				m, 3,
+				[Shock_Param, pc_cs_bfs](const BFSarg& arg) -> bool {
+					apf::Vector3 v;
+					apf::getVector(pc_cs_bfs, arg.e, 0, v);
+					return apf::getScalar(Shock_Param, arg.e, 0) == ShockParam::SHOCK &&
+								 v.y() < 0;
+				},
+				[pc_cs_bfs, &shocks](const BFSarg& arg) {
+					apf::Vector3 v;
+					apf::getVector(pc_cs_bfs, arg.e, 0, v);
+					v.x() = PCU_Comm_Self();
+					v.y() = arg.component;
+					v.z() = arg.distance;
+					apf::setVector(pc_cs_bfs, arg.e, 0, v);
 
-  void denoiseShocksSerial(const ph::Input& in, apf::Mesh2* m);
-  void segmentShocksSerial(const ph::Input& in, apf::Mesh2* m);
+					if (arg.component >= shocks.size()) {
+						shocks.push_back(std::vector<apf::MeshEntity*>());
+						shocks[arg.component].push_back(arg.e);
+					}
+				});
+
+		// FIXME: Process part boundary (repeated triplet max.)
+
+		return shocks;
+	}
+
+	/**
+   * @brief Remove components with < 10 elements.
+   * 
+   * @param in PHASTA input config.
+   * @param m APF mesh.
+   */
+  void denoiseShocksSerial(const ph::Input& in, apf::Mesh2* m, Shocks& shocks);
+
+  /**
+   * @brief Use planarity to segment shocks.
+   * 
+   * @param in PHASTA input config.
+   * @param m APF mesh.
+   */
+  void segmentShocksSerial(const ph::Input& in, apf::Mesh2* m, Shocks& shocks);
+
+  /**
+   * @brief Setup Simmetrix/APF size field depending on input.
+   * 
+   * @param in PHASTA input config.
+   * @param m APF mesh.
+   * @param szFld Size field to setup.
+   */
   void setupSizeField(const ph::Input& in, apf::Mesh2* m, apf::Field* szFld);
 
   /**
@@ -1761,18 +1836,18 @@ namespace pc {
 
     // 1. Gaps and fragments.
     // 1.a. Breadth-first search radius 3 or 5 neighbors.
-    defragmentShocksSerial(m);
+    defragmentShocksSerial(in, m);
 
     // 2. Component connection (breadth first search).
     // 2.a. OK to connect distinct shock systems.
-    labelShocksSerial(in, m);
+    Shocks shocks = labelShocksSerial(in, m);
 
     // 3. Filter components to remove noise (systems with <10 elements).
-    denoiseShocksSerial(in, m);
+    denoiseShocksSerial(in, m, shocks);
 
     // 4. Divide shock systems with planarity.
     if (in.shockIDSegment) {
-      segmentShocksSerial(in, m);
+      segmentShocksSerial(in, m, shocks);
     }
 
     // 5. Extension and intersection.
@@ -1781,7 +1856,7 @@ namespace pc {
     // 6. Size-field.
     setupSizeField(in, m, szFld);
     if (in.simmetrixMesh == 1) {
-      setupSimAdapter(...);
+      // setupSimAdapter(...);
       // run adapter, improver, etc.
     } else {
       chef::adapt(m, szFld, in);
