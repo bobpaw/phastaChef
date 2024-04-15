@@ -70,62 +70,6 @@ namespace pc {
      return output;
      }
 
-     void PropagateID1(std::map<apf::MeshEntity*, std::pair<set<apf::MeshEntity*>, int> >& LocGraph,
-                         std::set<apf::MeshEntity*>& InputSet,
-                         int ID){
-          if(InputSet.size()==0) {return;}
-          std::set<apf::MeshEntity*> NextSet;
-          for(auto itr=InputSet.begin(); itr!=InputSet.end(); itr++){
-               //set ID
-               LocGraph[*itr].second=ID;
-               //check neighbours
-               for(auto nei=LocGraph[*itr].first.begin(); nei!=LocGraph[*itr].first.end(); nei++ ){
-                    if (LocGraph[*nei].second!=0){//skip set IDs
-                         NextSet.insert(*nei);     
-                    }
-               }
-          }
-          PropagateID1(LocGraph,NextSet,ID);
-          return;
-     }
-
-
-     void PropagateID(std::set<apf::MeshEntity*>& Start, std::map<apf::MeshEntity*, std::pair<set<apf::MeshEntity*>, int> >& LocGraph, int ID){
-         int check=0; std::set<apf::MeshEntity*> Fill=Start;
-         while (check!=Fill.size()){
-              check=Fill.size();
-              Fill=TraceSurf(LocGraph, Fill);
-          }
-          for (auto itr=Fill.begin(); itr!=Fill.end(); itr++){
-               LocGraph[*itr].second=ID;     
-          }
-     }
-
-
-  std::set<apf::MeshEntity*> GetNeighs(std::set<apf::MeshEntity*>& Input, apf::Mesh2* m){
-     std::set<apf::MeshEntity*> Output = Input;
-     for (auto itr1=Input.begin(); itr1!=Input.end(); itr1++){
-          apf::Adjacent Adja; apf::MeshEntity* tmp;
-          getBridgeAdjacent(m, *itr1, 2,3, Adja); //get adjacent elements;
-          for(size_t i=0; i<Adja.getSize(); i++){
-               tmp=Adja[i];
-               Output.insert(tmp);
-          }
-     }
-     return Output;
-  } 
-
-  std::set<apf::MeshEntity*> GetN_Neighs(apf::MeshEntity* elm, apf::Mesh2* m, int n){
-     int check=0; std::set<apf::MeshEntity*> Fill={elm};
-     
-     while (check !=n){
-          Fill=GetNeighs(Fill, m);
-          check++;
-     }
-     return Fill;
-  }
-
-
   bool vertexIsInCylinder(apf::MeshEntity* v) {
     double x_min = 0.0;
     double x_max = 2.01;
@@ -399,38 +343,6 @@ namespace pc {
     GFIter_delete(gfIter);
   }
 
-  double estimateAdaptedMeshElements(apf::Mesh2*& m, apf::Field* sizes) {
-    attachCurrentSizeField(m);
-    apf::Field* cur_size = m->findField("cur_size");
-    assert(cur_size);
-
-    double estElm = 0.0;
-    apf::Vector3 v_mag  = apf::Vector3(0.0, 0.0, 0.0);
-    int num_dims = m->getDimension();
-    assert(num_dims == 3); // only work for 3D mesh
-    apf::Vector3 xi = apf::Vector3(0.25, 0.25, 0);
-    apf::MeshEntity* en;
-    apf::MeshIterator* eit = m->begin(num_dims);
-    while ((en = m->iterate(eit))) {
-      apf::MeshElement* elm = apf::createMeshElement(m,en);
-      apf::Element* fd_elm = apf::createElement(sizes,elm);
-      apf::getVector(fd_elm,xi,v_mag);
-      double h_old = apf::getScalar(cur_size,en,0);
-      if(EN_isBLEntity(reinterpret_cast<pEntity>(en))) {
-        estElm = estElm + (h_old/v_mag[0])*(h_old/v_mag[0]);
-      }
-      else {
-        estElm = estElm + (h_old/v_mag[0])*(h_old/v_mag[0])*(h_old/v_mag[0]);
-      }
-    }
-    m->end(eit);
-
-    apf::destroyField(cur_size);
-
-    double estTolElm = PCU_Add_Double(estElm);
-    return estTolElm;
-  }
-
   void initializeCtCn(apf::Mesh2*& m) {
     apf::Field* ctcn = apf::createSIMFieldOn(m, "ctcn_elm", apf::SCALAR);
     apf::MeshEntity* v;
@@ -490,74 +402,6 @@ namespace pc {
     m->end(vit);
   }
 
-  double applyMaxNumberElement(apf::Mesh2*& m, apf::Field* sizes, ph::Input& in)  {
-    /* scale mesh if number of elements exceeds threshold */
-    double N_est = estimateAdaptedMeshElements(m, sizes);
-    double cn = N_est / (double)in.simMaxAdaptMeshElements;
-    cn = (cn>1.0)?cbrt(cn):1.0;
-    if(!PCU_Comm_Self())
-      printf("Estimated No. of Elm: %f and c_N = %f\n", N_est, cn);
-    apf::Field* sol = m->findField("solution");
-    apf::Field* ctcn = m->findField("ctcn_elm");
-    assert(sol);
-    assert(ctcn);
-    apf::Vector3 v_mag = apf::Vector3(0.0,0.0,0.0);
-    apf::MeshEntity* v;
-    apf::MeshIterator* vit = m->begin(0);
-    while ((v = m->iterate(vit))) {
-      apf::getVector(sizes,v,0,v_mag);
-      for (int i = 0; i < 3; i++)
-        v_mag[i] = v_mag[i] * cn;
-      apf::setVector(sizes,v,0,v_mag);
-
-      double f = apf::getScalar(ctcn,v,0);
-      f = f * cn;
-      apf::setScalar(ctcn,v,0,f);
-    }
-    m->end(vit);
-    return cn;
-  }
-
-  void applyMaxTimeResource(apf::Mesh2*& m, apf::Field* sizes,
-                            ph::Input& in, phSolver::Input& inp) {
-    apf::Field* sol = m->findField("solution");
-    apf::Field* ctcn = m->findField("ctcn_elm");
-    assert(sol);
-    assert(ctcn);
-    apf::Vector3 v_mag = apf::Vector3(0.0,0.0,0.0);
-    apf::NewArray<double> s(in.ensa_dof);
-    double maxCt = 1.0;
-    double minCtH = 1.0e16;
-    apf::MeshEntity* v;
-    apf::MeshIterator* vit = m->begin(0);
-    while ((v = m->iterate(vit))) {
-      apf::getComponents(sol, v, 0, &s[0]);
-      double u = sqrt(s[1]*s[1]+s[2]*s[2]+s[3]*s[3]);
-      double c = sqrt(1.4*8.3145*s[4]/0.029); // ideal air assumed here
-      double t = inp.GetValue("Time Step Size");
-      double h_min = (u+c)*t/in.simCFLUpperBound;
-      if (h_min < in.simSizeLowerBound) h_min = in.simSizeLowerBound;
-      apf::getVector(sizes,v,0,v_mag);
-      double f = apf::getScalar(ctcn,v,0);
-      for (int i = 0; i < 3; i++) {
-        if(v_mag[i] < h_min) {
-          if(h_min/(v_mag[i]) > maxCt) maxCt = h_min/(v_mag[i]);
-          apf::setScalar(ctcn,v,0,h_min/v_mag[i]*f);
-          if(h_min < minCtH) minCtH = h_min;
-          v_mag[i] = h_min;
-        }
-      }
-      apf::setVector(sizes,v,0,v_mag);
-    }
-    m->end(vit);
-
-    double maxCtAll  = PCU_Max_Double(maxCt);
-    double minCtHAll = PCU_Min_Double(minCtH);
-    if (!PCU_Comm_Self())
-      printf("max time resource bound factor and min reached size: %f and %f\n",maxCtAll,minCtHAll);
-  }
-
-
   void syncMeshSize(apf::Mesh2*& m, apf::Field* sizes) {
     PCU_Comm_Begin();
     apf::Copies remotes;
@@ -597,11 +441,6 @@ namespace pc {
     if(!PCU_Comm_Self())
       std::cerr << "Begin sync mesh size" << std::endl;
     apf::synchronize(sizes);
-  }
-
-  // Return the metric intersection of two matrices.
-  apf::Matrix3x3 metricIntersection(const apf::Matrix3x3& lhs, const apf::Matrix3x3& rhs) {
-
   }
 
   void setupSimImprover(pVolumeMeshImprover vmi, pPList sim_fld_lst) {
