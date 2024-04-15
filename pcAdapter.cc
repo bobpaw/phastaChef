@@ -1793,12 +1793,27 @@ namespace pc {
 	}
 
 	/**
-   * @brief Remove components with < 10 elements.
+   * @brief Remove components with < minsize elements.
    * 
    * @param in PHASTA input config.
    * @param m APF mesh.
+   * @param shocks A collection of shocks which are each collections of entities.
+   * @param minsize The minimum component size to retain.
    */
-  void denoiseShocksSerial(const ph::Input& in, apf::Mesh2* m, Shocks& shocks);
+  void denoiseShocksSerial(const ph::Input& in, apf::Mesh2* m, Shocks& shocks, int minsize = 10) {
+    apf::Field* Shock_Param = m->findField("Shock_Param");
+
+    for (auto it = shocks.begin(); it != shocks.end();) {
+      if (it->size() < minsize) {
+        for (auto it2 = it->begin(); it2 != it->end(); ++it2) {
+          apf::setScalar(Shock_Param, *it2, 0, ShockParam::NONE);
+        }
+        it = shocks.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
 
   /**
    * @brief Use planarity to segment shocks.
@@ -1843,7 +1858,7 @@ namespace pc {
     Shocks shocks = labelShocksSerial(in, m);
 
     // 3. Filter components to remove noise (systems with <10 elements).
-    denoiseShocksSerial(in, m, shocks);
+    denoiseShocksSerial(in, m, shocks, 10);
 
     // 4. Divide shock systems with planarity.
     if (in.shockIDSegment) {
