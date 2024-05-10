@@ -322,51 +322,76 @@ namespace pc {
 		int component, distance;
 	};
 
-	using BFScheck = std::function<bool(const BFSarg& arg)>;
-	using BFSaction = std::function<void(const BFSarg& arg)>;
+  // Return value for BFScheck.
+  enum class BFSresult { ACT, CONTINUE, BREAK };
 
-	void serialBFS(apf::Mesh* m, int dimension, BFScheck check, BFSaction action) {
-    int bridgeDimension = 0;
-    if (dimension == 0) bridgeDimension = 1;
+  using BFScheck = std::function<BFSresult(const BFSarg& arg)>;
+  using BFSaction = std::function<void(const BFSarg& arg)>;
 
-    std::set<apf::MeshEntity*> visited;
+  /**
+   * Do a breadth-first search on mesh `m` for all elements of dimension `dim`.
+   *
+   * @param m The APF mesh to search through.
+   * @param dim The dimenion to search through.
+   * @param check A callable argument that determines what to do for a given
+   *              entity.
+   * @param action The action to perform on entities where `check()` returns
+   *               BFSresult::ACT.
+   */
+	void serialBFS(apf::Mesh* m, int dim, BFScheck check, BFSaction action) {
+    // Bridge through points by default.
+    int bridgeDim = 0;
+    if (dim == 0) bridgeDim = 1;
+
+    std::unordered_set<apf::MeshEntity*> visited(m->count(dim));
     BFSarg arg = (BFSarg){m, nullptr, nullptr, 0, 0};
 
+    bool bfs_done = false;
     int component = 0;
-    apf::MeshIterator *it = m->begin(dimension);
-    for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
+    apf::MeshIterator *it = m->begin(dim);
+    for (apf::MeshEntity* e = m->iterate(it); e && !bfs_done; e = m->iterate(it)) {
       int distance = 0;
       std::queue<apf::MeshEntity*> Q, Q_next;
 
       arg.c = e;
-      Q.push(e);
-      visited.insert(e);
 
       // BFS loop.
-      for (; !Q.empty(); Q.pop()) {
+      Q.push(e);
+      while (!Q.empty()) {
+        // Mark element as visited.
+        visited.insert(Q.front());
+
+        // Setup BFSarg.
         arg.e = Q.front();
         arg.component = component;
         arg.distance = distance;
-        if (check(arg)) {
+
+        BFSresult br = check(arg);
+        if (br == BFSresult::BREAK) {
+          bfs_done = true;
+          break;
+        } else if (br == BFSresult::ACT) {
           action(arg);
 
           apf::Adjacent neighbors;
-          apf::getBridgeAdjacent(m, Q.front(), bridgeDimension, dimension, neighbors);
+          apf::getBridgeAdjacent(m, Q.front(), bridgeDim, dim, neighbors);
           for (size_t i = 0; i < neighbors.size(); ++i) {
             if (visited.find(neighbors[i]) == visited.end()) {
               Q_next.push(neighbors[i]);
             }
           }
+        }
 
-          if (Q.empty()) {
-            Q = Q_next;
-            ++distance;
-          }
+        Q.pop();
+        if (Q.empty()) {
+          Q.swap(Q_next);
+          ++distance;
         }
       }
 
       ++component;
     }
+    m->end(it);
   }
 
   /**
@@ -386,13 +411,13 @@ namespace pc {
 
     apf::MeshIterator* it = m->begin(3);
     for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
-        serialBFS(m, 3, [dist_max](const BFSarg& arg) -> bool {
-          if (arg.component > 0) return false; // Only do one iteration.
+        serialBFS(m, 3, [dist_max](const BFSarg& arg) -> BFSresult {
+          if (arg.component > 0) return BFSresult::BREAK; // Only do one iteration.
           apf::Vector3 e_lc = apf::getLinearCentroid(arg.m, arg.e);
           apf::Vector3 c_lc = apf::getLinearCentroid(arg.m, arg.c);
           apf::Vector3 dist =  e_lc - c_lc;
           // Only process elements within spacing distance.
-          return dist * dist < dist_max * dist_max;
+          return dist * dist < dist_max * dist_max ? BFSresult::ACT : BFSresult::CONTINUE;
         }, [Shock_Param](const BFSarg& arg){
           if (apf::getScalar(Shock_Param, arg.e, 0) != ShockParam::SHOCK) {
             apf::setScalar(Shock_Param, arg.e, 0, ShockParam::FRAGMENT);
@@ -433,11 +458,11 @@ namespace pc {
 
 		serialBFS(
 				m, 3,
-				[Shock_Param, pc_cs_bfs](const BFSarg& arg) -> bool {
+				[Shock_Param, pc_cs_bfs](const BFSarg& arg) -> BFSresult {
 					apf::Vector3 v;
 					apf::getVector(pc_cs_bfs, arg.e, 0, v);
 					return apf::getScalar(Shock_Param, arg.e, 0) == ShockParam::SHOCK &&
-								 v.y() < 0;
+								 v.y() < 0 ? BFSresult::ACT : BFSresult::CONTINUE;
 				},
 				[pc_cs_bfs, &shocks](const BFSarg& arg) {
 					apf::Vector3 v;
