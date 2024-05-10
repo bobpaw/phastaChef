@@ -395,6 +395,87 @@ namespace pc {
   }
 
   /**
+   * Do a breadth-first search on mesh `m` starting from `e` through dimension
+   * `dim`.
+   *
+   * @param m An APF mesh.
+   * @param dim The dimension to search through.
+   * @param e The starting element.
+   * @param check A callable argument that determines what to do for a given
+   *              entity.
+   * @param action The action to perform on entities where `check()` returns
+                   BFSresult::ACT.
+   */
+  void serialBFS(apf::Mesh* m, int dim, apf::MeshEntity* e, BFScheck check,
+                 BFSaction action) {
+    int bridgeDim = 0;
+    if (dim == 0) bridgeDim = 1;
+
+    std::set<apf::MeshEntity*> visited;
+    BFSarg arg = (BFSarg){m, e, e, 0, 0};
+
+    int component = 0, distance = 0;
+		std::queue<apf::MeshEntity*> Q, Q_next;
+
+		// BFS loop.
+		for (Q.push(e); !Q.empty();) {
+			// Mark element as visited.
+			visited.insert(Q.front());
+
+			// Setup BFSarg.
+			arg.e = Q.front();
+			arg.distance = distance;
+
+			BFSresult br = check(arg);
+			if (br == BFSresult::BREAK) {
+				break;
+			} else if (br == BFSresult::ACT) {
+				action(arg);
+
+				apf::Adjacent neighbors;
+				apf::getBridgeAdjacent(m, Q.front(), bridgeDim, dim, neighbors);
+				for (size_t i = 0; i < neighbors.size(); ++i) {
+					if (visited.find(neighbors[i]) == visited.end()) {
+						Q_next.push(neighbors[i]);
+					}
+				}
+      }
+
+      Q.pop();
+      if (Q.empty()) {
+        Q.swap(Q_next);
+        ++distance;
+      }
+    }
+  }
+
+  /**
+   * Get the max radius of an entity -- that is, the distance between the \ref
+   * apf::getLinearCentroid "linear centroid" and the farthest point from the
+   * centroid.
+   *
+   * @param m An APF mesh on which `e` resides.
+   * @param e The entity to measure.
+   */
+  double getMaxRadius(apf::Mesh* m, apf::MeshEntity* e) {
+    apf::Vector3 lc = apf::getLinearCentroid(m, e);
+
+    double radius = 0;
+
+    // Get points.
+    apf::Downward points;
+    int points_size = m->getDownward(e, 0, points);
+    for (int i = 0; i < points_size; ++i) {
+      apf::Vector3 p;
+      m->getPoint(points[i], 0, p);
+      double r = (p - lc).getLength();
+      radius = r > radius ? r : radius;
+    }
+
+    return radius;
+  }
+
+  /**
    * @brief Fuzzily defragment shock elements. Mark elements neighboring shock
    * elements as shock.
    * 
@@ -403,26 +484,25 @@ namespace pc {
    * @output-field "Shock_Param"
    */
   void defragmentShocksSerial(const ph::Input& in, apf::Mesh2* m) {
-    // max linear search distance.
-    double dist_max = 0.1;
-    // TODO: Replace spacing with a factor against element size (sphere).
-    
     apf::Field* Shock_Param = m->findField("Shock_Param");
 
     apf::MeshIterator* it = m->begin(3);
     for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
-        serialBFS(m, 3, [dist_max](const BFSarg& arg) -> BFSresult {
-          if (arg.component > 0) return BFSresult::BREAK; // Only do one iteration.
+      if (apf::getScalar(Shock_Param, e, 0) == ShockParam::SHOCK) {
+        double dist_max = getMaxRadius(m, e); // Max linear search distance.
+        serialBFS(m, 3, e, [dist_max](const BFSarg& arg) -> BFSresult {
+          if (arg.distance > 1) return BFSresult::BREAK;
           apf::Vector3 e_lc = apf::getLinearCentroid(arg.m, arg.e);
           apf::Vector3 c_lc = apf::getLinearCentroid(arg.m, arg.c);
           apf::Vector3 dist =  e_lc - c_lc;
           // Only process elements within spacing distance.
           return dist * dist < dist_max * dist_max ? BFSresult::ACT : BFSresult::CONTINUE;
         }, [Shock_Param](const BFSarg& arg){
-          if (apf::getScalar(Shock_Param, arg.e, 0) != ShockParam::SHOCK) {
+          if (apf::getScalar(Shock_Param, arg.e, 0) == ShockParam::NONE) {
             apf::setScalar(Shock_Param, arg.e, 0, ShockParam::FRAGMENT);
           }
         });
+      }
     }
   }
 
