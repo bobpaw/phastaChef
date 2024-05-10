@@ -298,6 +298,13 @@ namespace pc {
     apf::Field* Shock_Param = apf::createField(m, "Shock_Param", apf::SCALAR,
                                                apf::getConstant(3));
 
+    // Initalize Shock_Param to NONE (ensure it is a complete field).
+    apf::MeshIterator *it = m->begin(3);
+    for (apf::MeshEntity *e = m->iterate(it); e; e = m->iterate(it)) {
+      apf::setScalar(Shock_Param, e, 0, ShockParam::NONE);
+    }
+    m->end(it);
+
     // Find shock line using IVT for edges.
     locateShockEdges(m, shk_det, Shock_Param);
 
