@@ -1,3 +1,15 @@
+#include <iostream>
+#include <fstream>
+#include <queue>
+#include <vector>
+#include <unordered_set>
+
+#include <apf.h>
+#include <apfMesh2.h>
+#include <apfShape.h>
+#include <PCU.h>
+#include <pcu_util.h>
+
 namespace pc {
   class ShockParam {
   public:
@@ -468,7 +480,7 @@ namespace pc {
    * @param in PHASTA input config.
    * @param m APF mesh.
    */
-  void segmentShocksSerial(const ph::Input& in, apf::Mesh2* m, Shocks& shocks);
+  void segmentShocksSerial(const ph::Input& in, apf::Mesh2* m, Shocks& shocks) {}
 
   /**
    * @brief Setup Simmetrix/APF size field depending on input.
@@ -477,7 +489,7 @@ namespace pc {
    * @param m APF mesh.
    * @param szFld Size field to setup.
    */
-  void setupSizeField(const ph::Input& in, apf::Mesh2* m, apf::Field* szFld);
+  void setupSizeField(const ph::Input& in, apf::Mesh2* m, apf::Field* szFld) {}
 
   /**
    * @brief Run mesh adaptation.
@@ -528,4 +540,3 @@ namespace pc {
     m->verify();
   }
 } // namespace pc
-
