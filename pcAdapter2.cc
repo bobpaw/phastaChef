@@ -7,21 +7,14 @@
 #include <apf.h>
 #include <apfMesh2.h>
 #include <apfShape.h>
+#include <chef.h>
+#include <phInput.h>
 #include <PCU.h>
 #include <pcu_util.h>
 
+#include "pcShockParam.h"
+
 namespace pc {
-  class ShockParam {
-  public:
-    static constexpr double NONE = 0;
-    static constexpr double SHOCK = 1;
-    static constexpr double FRAGMENT = 2;
-
-  private:
-    // Static only class has private constructor.
-    ShockParam();
-  };
-
   /**
    * @brief Generate averaged vertex pressure gradient field from region field.
    * @param m APF mesh.
