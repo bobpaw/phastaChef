@@ -1,6 +1,8 @@
 #ifndef PC_TEST_SHOCKFUNC_H
 #define PC_TEST_SHOCKFUNC_H
 
+#include <string>
+
 #include <apfMesh.h>
 
 namespace pc {
@@ -16,6 +18,8 @@ namespace pc {
       bool operator()(apf::Mesh* m, apf::MeshEntity* e) {
         return eval(m, e);
       }
+
+			static ShockFunc* makeFromString(std::string s, double tol);
     
     private:
       virtual bool eval(apf::Mesh* m, apf::MeshEntity* e) = 0;
@@ -37,6 +41,33 @@ namespace pc {
       }
       double a, b, c, d, tol_;
     };
+
+		ShockFunc* ShockFunc::makeFromString(std::string s, double tol) {
+			std::string::size_type col = s.find(':');
+			if (col == std::string::npos) {
+				throw std::invalid_argument("malformed ShockFunc descriptor");
+			}
+
+			std::string s_type = s.substr(0, col);
+
+			++col;
+			std::vector<int> args;
+			while (col < s.size()) {
+				std::string::size_type comma = s.find(',', col);
+				args.push_back(std::stof(s.substr(col, comma - col)));
+				if (comma == std::string::npos) break;
+				col = comma + 1;
+			}
+
+			if (s_type == "plane") {
+				if (args.size() != 4) {
+					throw std::invalid_argument("invalid ShockFunc arguments");
+				}
+				return new PlanarShockFunc(args[0], args[1], args[2], args[3], tol);
+			} else {
+				throw std::invalid_argument("invalid ShockFunc type");
+			}
+		}
   }
 }
 

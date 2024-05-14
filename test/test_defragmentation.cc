@@ -23,7 +23,7 @@ namespace pc {
 
 void print_usage(std::ostream& str, char* argv0) {
   str << "USAGE: " << argv0 << " <modelFileName> <meshFileName>"
-      << " <A> <B> <C> <D> <tol_alpha> <fragmentation>"
+      << " type:arg,arg,... <tol_alpha> <fragmentation>"
       << std::endl;
 }
 
@@ -102,7 +102,7 @@ int main (int argc, char* argv[]) {
   // lion verbosity
   lion_set_verbosity(1);
 
-  if (argc != 9) {
+  if (argc != 6) {
     print_usage(std::cerr, argv[0]);
     return -1;
   }
@@ -123,15 +123,14 @@ int main (int argc, char* argv[]) {
   int fragmentation;
 
   try {
-    double a = std::atof(argv[3]), b = std::atof(argv[4]);
-    double c = std::atof(argv[5]), d = std::atof(argv[6]);
-    double tol_alpha = std::atof(argv[7]);
+    double tol_alpha = std::atof(argv[4]);
     double tol = calculateTolerance(tol_alpha, m);
-    fragmentation = std::atoi(argv[8]);
+    fragmentation = std::atoi(argv[5]);
 
     std::cout << "Tolerance: " << tol << std::endl;
 
-    sf = new pc::_test::PlanarShockFunc(a, b, c, d, tol);
+    sf = pc::_test::ShockFunc::makeFromString(argv[3], tol);
+		if (sf == nullptr) throw std::invalid_argument("ShockFunc argument");
   } catch (const std::exception& e) {
     std::cerr << "ERROR: " << e.what() << std::endl;
     print_usage(std::cerr, argv[0]);
