@@ -11,6 +11,7 @@
 #include <gmi_mesh.h>
 #include <apfMDS.h>
 #include <phInput.h>
+#include <maSize.h>
 
 #include "pcShockParam.h"
 #include "ShockFunc.h"
@@ -22,7 +23,7 @@ namespace pc {
 
 void print_usage(std::ostream& str, char* argv0) {
   str << "USAGE: " << argv0 << " <modelFileName> <meshFileName>"
-      << " <A> <B> <C> <D> <tol> <fragmentation>"
+      << " <A> <B> <C> <D> <tol_alpha> <fragmentation>"
       << std::endl;
 }
 
@@ -89,6 +90,9 @@ int fragmentShockParam(apf::Mesh* m, int percent) {
   return n;
 }
 
+double calculateTolerance(double alpha, apf::Mesh2* m) {
+  return alpha * ma::getAverageEdgeLength(m);
+}
 
 int main (int argc, char* argv[]) {
   // MPI/PCU init?
@@ -107,30 +111,32 @@ int main (int argc, char* argv[]) {
   pc::_test::ShockFunc* sf = nullptr;
 
   ph::Input in;
-
-  int fragmentation;
-
-  try {
-    in.modelFileName = std::string(argv[1]);
-    in.meshFileName = std::string(argv[2]);
-    double a = std::atof(argv[3]), b = std::atof(argv[4]);
-    double c = std::atof(argv[5]), d = std::atof(argv[6]);
-    double tol = std::atof(argv[7]);
-    fragmentation = std::atoi(argv[8]);
-
-    // FIXME: Replace tol with tolerance based on a fraction of mesh size.
-    sf = new pc::_test::PlanarShockFunc(a, b, c, d, tol);
-  } catch (const std::exception& e) {
-    std::cerr << "ERROR: " << e.what() << std::endl;
-    print_usage(std::cerr, argv[0]);
-    return -1;
-  }
+  in.modelFileName = std::string(argv[1]);
+  in.meshFileName = std::string(argv[2]);
 
   // Init gmi.
   gmi_register_mesh();
 
   // Load mesh.
   m = apf::loadMdsMesh(in.modelFileName.c_str(), in.meshFileName.c_str());
+
+  int fragmentation;
+
+  try {
+    double a = std::atof(argv[3]), b = std::atof(argv[4]);
+    double c = std::atof(argv[5]), d = std::atof(argv[6]);
+    double tol_alpha = std::atof(argv[7]);
+    double tol = calculateTolerance(tol_alpha, m);
+    fragmentation = std::atoi(argv[8]);
+
+    std::cout << "Tolerance: " << tol << std::endl;
+
+    sf = new pc::_test::PlanarShockFunc(a, b, c, d, tol);
+  } catch (const std::exception& e) {
+    std::cerr << "ERROR: " << e.what() << std::endl;
+    print_usage(std::cerr, argv[0]);
+    return -1;
+  }
 
   apf::Vector3 c_min, c_max;
   apf::MeshIterator* it = m->begin(0);
@@ -147,11 +153,8 @@ int main (int argc, char* argv[]) {
 
   apf::Vector3 m_size = c_max - c_min;
 
-  // Enable the 1ms literal.
-  using namespace std::literals;
-
   // Print mesh statistics.
-  std::cout << "Mesh size: (" << m_size.x() << ", " << m_size.y() << ", " << m_size.z() << ")." << std::endl;
+  std::cout << "Mesh bounding box size: (" << m_size.x() << ", " << m_size.y() << ", " << m_size.z() << ")." << std::endl;
   std::cout << "Mesh elements (D=3): " << m->count(3) << std::endl;
 
   auto clock_start = std::chrono::steady_clock::now();
