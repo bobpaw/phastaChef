@@ -621,6 +621,7 @@ namespace pc {
    * @param m APF Mesh.
    * @input-field "Shock_Param"
    * @output-field "Shock_Param"
+   * @TODO Think about the name.
    */
   void defragmentShocksSerial(const ph::Input& in, apf::Mesh2* m) {
     apf::Field* Shock_Param = m->findField("Shock_Param");
@@ -630,7 +631,7 @@ namespace pc {
       if (apf::getScalar(Shock_Param, e, 0) == ShockParam::SHOCK) {
         double dist_max = getMaxRadius(m, e); // Max linear search distance.
         serialBFS(m, 3, e, [dist_max](const BFSarg& arg) -> BFSresult {
-          if (arg.distance > 1) return BFSresult::BREAK;
+          if (arg.distance > 2) return BFSresult::BREAK;
           apf::Vector3 e_lc = apf::getLinearCentroid(arg.m, arg.e);
           apf::Vector3 c_lc = apf::getLinearCentroid(arg.m, arg.c);
           apf::Vector3 dist =  e_lc - c_lc;
@@ -668,33 +669,37 @@ namespace pc {
 		// Initialize BFS field.
 		apf::MeshIterator* it = m->begin(3);
 		for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
-			apf::Vector3 bfs_trip(-1, -1, std::numeric_limits<double>::infinity());
+			apf::Vector3 bfs_trip(-1, -1, -1);
 			apf::setVector(pc_cs_bfs, e, 0, bfs_trip);
 		}
 		m->end(it);
 
 		Shocks shocks;
+		int current_component = -1;
 
 		serialBFS(
 				m, 3,
 				[Shock_Param, pc_cs_bfs](const BFSarg& arg) -> BFSresult {
 					apf::Vector3 v;
 					apf::getVector(pc_cs_bfs, arg.e, 0, v);
-					return apf::getScalar(Shock_Param, arg.e, 0) == ShockParam::SHOCK &&
+					return apf::getScalar(Shock_Param, arg.e, 0) != ShockParam::NONE &&
 								 v.y() < 0 ? BFSresult::ACT : BFSresult::CONTINUE;
 				},
-				[pc_cs_bfs, &shocks](const BFSarg& arg) {
+				[pc_cs_bfs, &shocks, &current_component](const BFSarg& arg) {
+					// Check if this is a new shock component.
+					if (arg.component != current_component) {
+						shocks.emplace_back();
+						current_component = arg.component;
+					}
+
 					apf::Vector3 v;
 					apf::getVector(pc_cs_bfs, arg.e, 0, v);
 					v.x() = PCU_Comm_Self();
-					v.y() = arg.component;
+					v.y() = shocks.size();
 					v.z() = arg.distance;
 					apf::setVector(pc_cs_bfs, arg.e, 0, v);
 
-					if (arg.component >= shocks.size()) {
-						shocks.push_back(std::vector<apf::MeshEntity*>());
-						shocks[arg.component].push_back(arg.e);
-					}
+					shocks.back().push_back(arg.e);
 				});
 
 		// FIXME: Process part boundary (repeated triplet max.)
