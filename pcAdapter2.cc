@@ -469,6 +469,152 @@ namespace pc {
   }
 
   /**
+   * Reorder `verts` to be counter-clockwise around the face normal (right-hand
+   * rule).
+   *
+   * If face is invalid for the given entity type, reorderCCW silently fails.
+   *
+   * @param verts An apf::Downward or statically allocated array of vertices.
+   * @param type The element type the face is on (tet, hex, prism, or pyramid).
+   * @param face Which face the verts are on (using the same scheme as
+   *             apf::Mesh::getDownward)
+   */
+  void reorderCCW(apf::MeshEntity** verts, apf::Mesh::Type type, int face) {
+    switch (type) {
+    case apf::Mesh::TET:
+      if (face == 0 || face == 3) std::swap(verts[1], verts[2]);
+      break;
+    case apf::Mesh::HEX:
+      if (face == 1 || face == 2 || face == 3) std::swap(verts[2], verts[3]);
+      else if (face == 0) std::swap(verts[1], verts[3]);
+      else if (face == 4) std::swap(verts[0], verts[1]);
+      break;
+    case apf::Mesh::PRISM:
+      if (face == 0) std::swap(verts[1], verts[2]);
+      else if (face == 1 || face == 2) std::swap(verts[2], verts[3]);
+      else if (face == 3) std::swap(verts[0], verts[1]);
+      break;
+    case apf::Mesh::PYRAMID:
+      if (face == 0) std::swap(verts[1], verts[3]);
+      else if (face == 4) std::swap(verts[1], verts[2]);
+      break;
+    default:
+      PCU_ALWAYS_ASSERT("reorderCCW: invalid type" && false);
+    }
+  }
+
+  /**
+   * Edge indicator from R. Chorda et al. 2002 where -1 indicates trajectory
+   * toward outside of face, 0 indicates trajectory through edge, and 1
+   * indicates trajectory toward inside of face.
+   */
+  int edgeIndicator(apf::Mesh2* m, const apf::Vector3& src, const apf::Vector3& dst,
+                apf::MeshEntity* v1, apf::MeshEntity* v2) {
+    PCU_DEBUG_ASSERT(m->getType(v1) == apf::Mesh::VERTEX);
+    PCU_DEBUG_ASSERT(m->getType(v2) == apf::Mesh::VERTEX);
+    apf::Vector3 v1pos = apf::getLinearCentroid(m, v1),
+                 v2pos = apf::getLinearCentroid(m, v2);
+    apf::Vector3 normal = apf::cross(v1pos - src, v2pos - src);
+    double ind = normal * (dst - src);
+    return ind < 0 ? -1 : (ind > 0 ? 1 : 0);
+  }
+
+  /**
+   * Perform an `action` on elements intersected by a ray from `start` to `end`.
+   *
+   * Action always occurs for `start`, then ray tracing starts. Action is only
+   * run for `end` if there is path along the ray (i.e. not when there's empty
+   * space).
+   *
+   * @param start,end Mesh elements (dim=3).
+   * @param action An action to perform on mesh elements.
+   */
+  void rayTrace(apf::Mesh2* m, apf::MeshEntity* start, apf::MeshEntity* end,
+                std::function<void(apf::Mesh2* m, apf::MeshEntity* e)> action) {
+    apf::Vector3 src = apf::getLinearCentroid(m, start),
+                 dst = apf::getLinearCentroid(m, end);
+
+    for (apf::MeshEntity* e = start; e != end;) {
+      action(m, e);
+      apf::MeshEntity* exit_edge = nullptr;
+      apf::Downward faces;
+      int face_ct = m->getDownward(e, 2, faces);
+      for (int i = 0; i < face_ct; ++i) {
+        // Construct vertex list.
+        apf::Downward verts;
+        int vert_ct = m->getDownward(faces[i], 0, verts);
+        reorderCCW(verts, m->getType(e), i);
+        verts[vert_ct] = verts[0]; // Make circular list.
+
+        // Search for an exit face.
+        bool exit_found = true;
+        for (int j = 0; exit_found && j < vert_ct; ++j) {
+          int ind = edgeIndicator(m, src, dst, verts[j], verts[j + 1]);
+          if (ind == 0) {
+            // Not the exit face, but may be an exit edge so remember it for later.
+            apf::Downward edges;
+            int edge_ct = m->getDownward(faces[i], 1, edges);
+            for (int k = 0; k < edge_ct; ++k) {
+              apf::Downward edge_verts;
+              m->getDownward(edges[k], 0, edge_verts);
+              if (edge_verts[0] == verts[j] && edge_verts[1] == verts[j+1] ||
+                  edge_verts[1] == verts[j] && edge_verts[0] == verts[j+1]) {
+                // exit edge has positive dot product while entry edge will
+                // have negative dot product. this case will happen on non-tet
+                // elements.
+                apf::Vector3 k_lc = apf::getLinearCentroid(m, edges[k]);
+                if ((dst - src) * (k_lc - src) > 0) {
+                  exit_edge = edges[k];
+                  break;
+                }
+              }
+            }
+            exit_found = false;
+          } else if (ind == -1) exit_found = false;
+        }
+
+        if (exit_found) {
+          exit_edge = nullptr;
+          int up = m->countUpward(faces[i]);
+          PCU_DEBUG_ASSERT(up <= 2);
+          if (up == 1) {
+            // There is empty space between this region and the next so tracing
+            // stops here.
+            return;
+          } else if (m->getUpward(faces[i], 0) == e) {
+            e = m->getUpward(faces[i], 1);
+          } else {
+            PCU_DEBUG_ASSERT(m->getUpward(faces[i], 1) == e);
+            e = m->getUpward(faces[i], 0);
+          }
+          break;
+        }
+      }
+
+      if (exit_edge != nullptr) {
+        apf::Adjacent rgns;
+        m->getAdjacent(exit_edge, 3, rgns);
+        PCU_DEBUG_ASSERT(rgns.size() > 1); // At least us and somebody else.
+        double max_dot = 0;
+        apf::MeshEntity* opposite_rgn = nullptr;
+        for (int i = 0; i < rgns.size(); ++i) {
+          if (rgns[i] != e) {
+            apf::Vector3 rgn_ray = apf::getLinearCentroid(m, rgns[i]) - src;
+            // FIXME: Find something that doesn't rely on sqrt.
+            double dot = ((dst - src) * rgn_ray)/rgn_ray.getLength();
+            if (dot > max_dot) {
+              opposite_rgn = rgns[i];
+              max_dot = dot;
+            }
+          }
+        }
+        e = opposite_rgn;
+      }
+    }
+    action(m, end);
+  }
+
+  /**
    * @brief Fuzzily defragment shock elements. Mark elements neighboring shock
    * elements as shock.
    * 
