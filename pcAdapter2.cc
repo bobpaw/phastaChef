@@ -795,4 +795,31 @@ namespace pc {
 
     m->verify();
   }
+
+  void shocksAbstract(apf::Mesh2* m, const ph::Input& in) {
+    detectShocksSerial(in, m);
+    apf::writeVtkFiles("shock_detected.vtk", m);
+    defragmentShocksSerial(in, m);
+    apf::writeVtkFiles("shock_defrag.vtk", m);
+    Shocks shocks = labelShocksSerial(in, m);
+
+    apf::Field* pc_cs_bfs = m->findField("pc_cs_bfs");
+    apf::Field* Shock_ID = apf::createField(m, "Shock_ID", apf::SCALAR, apf::getConstant(3));
+    apf::zeroField(Shock_ID);
+    apf::MeshIterator* it = m->begin(3);
+    for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
+      apf::Vector3 bfs_trip;
+      apf::getVector(pc_cs_bfs, e, 0, bfs_trip);
+      if (bfs_trip.y() > 0) apf::setScalar(Shock_ID, e, 0, bfs_trip.y());
+    }
+    m->end(it);
+
+    if (!apf::isPrintable(Shock_ID)) {
+      std::cerr << "WARNING: Shock_ID is not printable." << std::endl;
+    }
+
+    apf::writeVtkFiles("shock_label.vtk", m);
+    denoiseShocksSerial(in, m, shocks, 10);
+    apf::writeVtkFiles("shock_denoise.vtk", m);
+  }
 } // namespace pc
