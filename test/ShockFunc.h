@@ -59,6 +59,40 @@ namespace pc {
 			double a, b, c, r, tol_;
 		};
 
+		/**
+		 * @brief A 3D cylindrical (x-aligned) shock function |(y-B)^2+(z-C)^2-R^2|<=tol.
+		 */
+		class CylindricalXShockFunc : public ShockFunc {
+		public:
+			CylindricalXShockFunc(double B, double C, double R, double tol) :
+			b(B), c(C), r(R), tol_(tol) {}
+
+		private:
+			virtual bool eval(apf::Mesh* m, apf::MeshEntity* e) {
+				apf::Vector3 lc = apf::getLinearCentroid(m, e);
+				double j = lc.y() - b, k = lc.z() - c;
+				return std::abs(j * j + k * k - r * r) <= tol_;
+			}
+			double b, c, r, tol_;
+		};
+
+		/**
+		 * @brief A 3D cylindrical (z-aligned) shock function |(x-A)^2+(y-B)^2-R^2|<=tol.
+		 */
+		class CylindricalZShockFunc : public ShockFunc {
+		public:
+			CylindricalZShockFunc(double A, double B, double R, double tol) :
+			a(A), b(B), r(R), tol_(tol) {}
+
+		private:
+			virtual bool eval(apf::Mesh* m, apf::MeshEntity* e) {
+				apf::Vector3 lc = apf::getLinearCentroid(m, e);
+				double i = lc.x() - a, j = lc.y() - b;
+				return std::abs(i * i + j * j - r * r) <= tol_;
+			}
+			double a, b, r, tol_;
+		};
+
 		ShockFunc* ShockFunc::makeFromString(std::string s, double tol) {
 			std::string::size_type col = s.find(':');
 			if (col == std::string::npos) {
@@ -68,7 +102,7 @@ namespace pc {
 			std::string s_type = s.substr(0, col);
 
 			++col;
-			std::vector<int> args;
+			std::vector<double> args;
 			while (col < s.size()) {
 				std::string::size_type comma = s.find(',', col);
 				args.push_back(std::stof(s.substr(col, comma - col)));
@@ -86,6 +120,16 @@ namespace pc {
 					throw std::invalid_argument("invalid ShockFunc arguments");
 				}
 				return new SphericalShockFunc(args[0], args[1], args[2], args[3], tol);
+			} else if (s_type == "cyl_x") {
+				if (args.size() != 3) {
+					throw std::invalid_argument("invalid ShockFunc arguments");
+				}
+				return new CylindricalXShockFunc(args[0], args[1], args[2], tol);
+			} else if (s_type == "cyl_z") {
+				if (args.size() != 3) {
+					throw std::invalid_argument("invalid ShockFunc arguments");
+				}
+				return new CylindricalZShockFunc(args[0], args[1], args[2], tol);
 			} else {
 				throw std::invalid_argument("invalid ShockFunc type");
 			}
