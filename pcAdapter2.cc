@@ -1,5 +1,6 @@
 #include <iostream>
 #include <fstream>
+#include <functional>
 #include <queue>
 #include <vector>
 #include <unordered_set>
@@ -39,7 +40,7 @@ namespace pc {
     // Iterate through every vertex.
     apf::MeshIterator* it = m->begin(0);
     for (apf::MeshEntity* v = m->iterate(it); v; v = m->iterate(it)) {
-      apf::Vector3 pg_sum;
+      apf::Vector3 pg_sum(0, 0, 0);
       apf::Adjacent adja;
       m->getAdjacent(v, 3, adja);
 
@@ -100,7 +101,7 @@ namespace pc {
     apf::Field* td_sol = m->findField("time derivative of solution");
     apf::Field* shk_det = apf::createFieldOn(m, "shk_det", apf::SCALAR);
 
-    apf::Vector3 pg_avg;
+    apf::Vector3 pg_avg(0, 0, 0);
     apf::NewArray<double> sol_tmp(apf::countComponents(sol));
     apf::NewArray<double> td_sol_tmp(apf::countComponents(td_sol));
 
@@ -113,7 +114,7 @@ namespace pc {
       apf::Vector3 sol_v(sol_tmp.begin() + 1);
 
       double a = sqrt(1.4*287 * sol_tmp[4]); // = speed of sound = sqrt(gamma*R)
-      double mach_n = (td_sol_tmp[0]/a + sol_v * pg_avg)/pg_avg.getLength();
+      double mach_n = (td_sol_tmp[0] + sol_v * pg_avg)/a/pg_avg.getLength();
 
       apf::setScalar(shk_det, v, 0, mach_n);
     }
@@ -193,6 +194,8 @@ namespace pc {
 			}
 		}
 
+		std::cout << "Read Shock.inp." << std::endl;
+
 		return sf;
 	}
 
@@ -232,7 +235,7 @@ namespace pc {
 
     // Propogate Shock_Param along mesh partition boundary.
     apf::Sharing* sharing = apf::getSharing(m);
-    apf::sharedReduction(Shock_Param, sharing, false,
+    apf::sharedReduction(Shock_Param, sharing, true,
                          apf::ReductionMax<double>());
   }
 
@@ -255,7 +258,9 @@ namespace pc {
     apf::NewArray<double> vms(apf::countComponents(VMS_error));
 
     apf::MeshIterator* it = m->begin(3);
-    for (apf::MeshEntity* e = m->iterate(it); e; m->iterate(it)) {
+    for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
+      apf::getComponents(P_Filt, e, 0, p.begin());
+      apf::getComponents(VMS_error, e, 0, vms.begin());
       apf::Vector3 vms_v(vms.begin() + 1);
       if (!(filt.checkPressure(p[3]) && filt.checkVMS(vms_v.getLength()))) {
         apf::setScalar(Shock_Param, e, 0, ShockParam::NONE);
@@ -283,9 +288,11 @@ namespace pc {
    */
   void detectShocksSerial(const ph::Input& in, apf::Mesh2* m) {
     apf::Field* PG_avg = smoothP_Filt(m);
+    std::cout << "Smoothed P_Filt." << std::endl;
 
     // Calculate normal mach number.
     apf::Field* shk_det = calcNormalMach(m);
+    std::cout << "Calculated normal mach number." << std::endl;
 
     // Shock_Param is a scalar indicator (1 or 0) field on 3D elements.
     apf::Field* Shock_Param = apf::createField(m, "Shock_Param", apf::SCALAR,
@@ -297,12 +304,17 @@ namespace pc {
       apf::setScalar(Shock_Param, e, 0, ShockParam::NONE);
     }
     m->end(it);
+    std::cout << "Initialized Shock_Param." << std::endl;
 
     // Find shock line using IVT for edges.
     locateShockEdges(m, shk_det, Shock_Param);
+    std::cout << "Located shock edges." << std::endl;
+
+    apf::writeVtkFiles("shock_located.vtk", m);
 
     // Filter Shock_Param using pressure/vms error.
     filterShockParam(m, Shock_Param, ShockFilter::ReadFile("Shock.inp"));
+    std::cout << "Filtered Shock_Param." << std::endl;
 
     // Destroy intermediate fields.
     apf::destroyField(shk_det);
