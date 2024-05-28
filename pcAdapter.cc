@@ -17,6 +17,7 @@
 #include <phastaChef.h>
 #include <maStats.h>
 #include <apfShape.h>
+#include <apfNumbering.h>
 #include <math.h>
 #include <fstream>
 #include <limits>
@@ -1193,6 +1194,55 @@ namespace pc {
         interactionHandling(m,in);
       }
 
+      { // scope to write ML Input
+        apf::Numbering* Tet_ID = apf::numberOwnedDimension(m, "Tet_ID", 3);
+        apf::Field* Tri_LC = apf::createField(m, "Tri_LC", apf::VECTOR, apf::getConstant(3));
+        apf::Field* MLcircle = apf::createField(m, "MLcircle", apf::SCALAR, apf::getConstant(3));
+        apf::zeroField(Tri_LC);
+        apf::zeroField(MLcircle);
+
+        apf::Vector3 left_corner(1.63835, 0.0946261, 0.2),
+                     right_corner(1.9475, 0.06205, 0.2);
+        double left_tol = 0.20752943473372; // 1.1*distance from corner to shock intersection with mesh boundary.
+        double right_tol = 0.1609982; // 1.1*distance from corner to shock intersection with mesh boundary.
+
+        std::ofstream mlinput_csv("mlinput.csv");
+        std::ofstream mlinput_csv3("mlinput3.csv");
+        mlinput_csv << std::setprecision(std::numeric_limits<double>::digits10 + 1);
+
+        it = m->begin(3);
+        for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
+          double shock_id = apf::getScalar(Shock_IDs, e, 0);
+          apf::Downward faces;
+          int face_ct = m->getDownward(e, 2, faces);
+          for (int i = 0; i < face_ct; ++i) {
+            apf::Vector3 face_lc = apf::getLinearCentroid(m, faces[i]);
+            if (std::abs(face_lc.z() - 0.2) <= 0.0001) { // Front face.
+              if (shock_id != 0) {
+                apf::setVector(Tri_LC, e, 0, face_lc);
+                mlinput_csv << apf::getNumber(Tet_ID, e, 0, 0) << ','
+                            << face_lc.x() << ',' << face_lc.y() << ','
+                            << face_lc.z() << ',' << (int) shock_id << std::endl;
+              }
+              if ((face_lc - left_corner).getLength() <= left_tol) {
+                mlinput_csv3 << apf::getNumber(Tet_ID, e, 0, 0) << ','
+                             << face_lc.x() << ',' << face_lc.y() << ','
+                             << face_lc.z() << ",1" << std::endl;
+                apf::setScalar(MLcircle, e, 0, 1);
+              }
+              if ((face_lc - right_corner).getLength() <= right_tol) {
+                mlinput_csv3 << apf::getNumber(Tet_ID, e, 0, 0) << ','
+                             << face_lc.x() << ',' << face_lc.y() << ','
+                             << face_lc.z() << ",2" << std::endl;
+                apf::setScalar(MLcircle, e, 0, 2);
+              }
+            }
+          }
+        }
+        m->end(it);
+
+        apf::writeVtkFiles("shock_tris.vtk", m, 3);
+      }
 
       /* Create vertex level shock indicator for aniso adaptation */
       // Mark vertices that have an adjacent shock containing element 

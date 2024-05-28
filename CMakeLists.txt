@@ -86,6 +86,7 @@ setup_exe(chefPhastaLoop_stream_adapt chef_phasta_adaptLoop.cc ${phastaIC_FOUND}
 setup_exe(chefPhastaLoop_files_adapt chef_phasta_adaptLoop_files.cc ${phastaIC_FOUND})
 setup_exe(chefPhastaLoop_sam_stream_adapt chef_phasta_sam_adaptLoop.cc ${phastaIC_FOUND})
 setup_exe(loopChefPhasta loopChefPhasta.cc ${phastaIC_FOUND})
+setup_exe(loopChefPhastaMLInput loopChefPhastaMLInput.cc ${phastaIC_FOUND})
 setup_exe(transferAndAdapter transferAndAdapter.cc ${phastaIC_FOUND})
 setup_exe(solutionProjection solutionProjection.cc ${phastaIC_FOUND})
 setup_exe(calcEfficiency calcEfficiency.cc ${phastaIC_FOUND})
