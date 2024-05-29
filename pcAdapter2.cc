@@ -729,11 +729,13 @@ namespace pc {
    */
   void denoiseShocksSerial(const ph::Input& in, apf::Mesh2* m, Shocks& shocks, int minsize = 10) {
     apf::Field* Shock_Param = m->findField("Shock_Param");
+    apf::Field* pc_cs_bfs = m->findField("pc_cs_bfs");
 
     for (auto it = shocks.begin(); it != shocks.end();) {
       if (it->size() < minsize) {
         for (auto it2 = it->begin(); it2 != it->end(); ++it2) {
           apf::setScalar(Shock_Param, *it2, 0, ShockParam::NONE);
+          apf::setVector(pc_cs_bfs, *it2, 0, apf::Vector3(-1, -1, -1));
         }
         it = shocks.erase(it);
       } else {
