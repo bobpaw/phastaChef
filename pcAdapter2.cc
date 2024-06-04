@@ -4,6 +4,7 @@
 #include <queue>
 #include <vector>
 #include <unordered_set>
+#include <set>
 
 #include <apf.h>
 #include <apfMesh2.h>
@@ -455,84 +456,48 @@ namespace pc {
   }
 
   /**
-   * Get the max radius of an entity -- that is, the distance between the \ref
-   * apf::getLinearCentroid "linear centroid" and the farthest point from the
-   * centroid.
-   *
-   * @param m An APF mesh on which `e` resides.
-   * @param e The entity to measure.
+   * @brief Edge indicator from R. Chorda et al. 2002.
+   * @return -1 given trajectory toward outside of face.
+   * @return 0 given trajectory through edge, and 1
+   * @return 1 given trajectory toward inside of face.
    */
-  double getMaxRadius(apf::Mesh* m, apf::MeshEntity* e) {
-    apf::Vector3 lc = apf::getLinearCentroid(m, e);
-
-    double radius = 0;
-
-    // Get points.
-    apf::Downward points;
-    int points_size = m->getDownward(e, 0, points);
-    for (int i = 0; i < points_size; ++i) {
-      apf::Vector3 p;
-      m->getPoint(points[i], 0, p);
-      double r = (p - lc).getLength();
-      radius = r > radius ? r : radius;
-    }
-
-    return radius;
-  }
-
-  /**
-   * Reorder `verts` to be counter-clockwise around the face normal (right-hand
-   * rule).
-   *
-   * If face is invalid for the given entity type, reorderCCW silently fails.
-   *
-   * @param verts An apf::Downward or statically allocated array of vertices.
-   * @param type The element type the face is on (tet, hex, prism, or pyramid).
-   * @param face Which face the verts are on (using the same scheme as
-   *             apf::Mesh::getDownward)
-   */
-  void reorderCCW(apf::MeshEntity** verts, apf::Mesh::Type type, int face) {
-    switch (type) {
-    case apf::Mesh::TET:
-      if (face == 0 || face == 3) std::swap(verts[1], verts[2]);
-      break;
-    case apf::Mesh::HEX:
-      if (face == 1 || face == 2 || face == 3) std::swap(verts[2], verts[3]);
-      else if (face == 0) std::swap(verts[1], verts[3]);
-      else if (face == 4) std::swap(verts[0], verts[1]);
-      break;
-    case apf::Mesh::PRISM:
-      if (face == 0) std::swap(verts[1], verts[2]);
-      else if (face == 1 || face == 2) std::swap(verts[2], verts[3]);
-      else if (face == 3) std::swap(verts[0], verts[1]);
-      break;
-    case apf::Mesh::PYRAMID:
-      if (face == 0) std::swap(verts[1], verts[3]);
-      else if (face == 4) std::swap(verts[1], verts[2]);
-      break;
-    default:
-      PCU_ALWAYS_ASSERT("reorderCCW: invalid type" && false);
-    }
-  }
-
-  /**
-   * Edge indicator from R. Chorda et al. 2002 where -1 indicates trajectory
-   * toward outside of face, 0 indicates trajectory through edge, and 1
-   * indicates trajectory toward inside of face.
-   */
-  int edgeIndicator(apf::Mesh2* m, const apf::Vector3& src, const apf::Vector3& dst,
+  int edgeIndicator(apf::Mesh* m, const apf::Vector3& src, const apf::Vector3& dst,
                 apf::MeshEntity* v1, apf::MeshEntity* v2) {
+    PCU_DEBUG_ASSERT(v1 != v2);
     PCU_DEBUG_ASSERT(m->getType(v1) == apf::Mesh::VERTEX);
     PCU_DEBUG_ASSERT(m->getType(v2) == apf::Mesh::VERTEX);
     apf::Vector3 v1pos = apf::getLinearCentroid(m, v1),
                  v2pos = apf::getLinearCentroid(m, v2);
     apf::Vector3 normal = apf::cross(v1pos - src, v2pos - src);
     double ind = normal * (dst - src);
+    double tol = 1e-15;
+    if (-tol < ind && ind < tol) return 0;
     return ind < 0 ? -1 : (ind > 0 ? 1 : 0);
   }
 
+  constexpr int tet_face_verts_ccw[4][3] = {
+    {0, 2, 1}, {0, 1, 3}, {1, 2, 3}, {0, 3, 2}
+  };
+
+  int getFaceVertsCCW(apf::Mesh* m, apf::MeshEntity* e, int face,
+    apf::MeshEntity** verts) {
+    apf::Downward verts_tmp;
+    m->getDownward(e, 0, verts_tmp);
+    switch (m->getType(e)) {
+    case apf::Mesh::TET:
+      for (int i = 0; i < 3; ++i) {
+        verts[i] = verts_tmp[tet_face_verts_ccw[face][i]];
+      }
+      return 3;
+    default:
+      std::cerr << "ERROR: mesh type not implemented.\n" << std::endl;
+      return 0;
+    }
+  }
+
   /**
-   * Perform an `action` on elements intersected by a ray from `start` to `end`.
+   * @brief Perform an `action` on elements intersected by a ray from `start` to
+   * `end`.
    *
    * Action always occurs for `start`, then ray tracing starts. Action is only
    * run for `end` if there is path along the ray (i.e. not when there's empty
@@ -541,12 +506,11 @@ namespace pc {
    * @param start,end Mesh elements (dim=3).
    * @param action An action to perform on mesh elements.
    */
-  void rayTrace(apf::Mesh2* m, apf::MeshEntity* start, apf::MeshEntity* end,
-                std::function<void(apf::Mesh2* m, apf::MeshEntity* e)> action) {
+  void rayTrace(apf::Mesh* m, apf::MeshEntity* start, apf::MeshEntity* end,
+                std::function<void(apf::Mesh* m, apf::MeshEntity* e)> action) {
     apf::Vector3 src = apf::getLinearCentroid(m, start),
                  dst = apf::getLinearCentroid(m, end);
-
-    for (apf::MeshEntity* e = start; e != end;) {
+    for (apf::MeshEntity* e = start, *e_old = e; e != end; e_old = e) {
       action(m, e);
       apf::MeshEntity* exit_edge = nullptr;
       apf::Downward faces;
@@ -554,8 +518,7 @@ namespace pc {
       for (int i = 0; i < face_ct; ++i) {
         // Construct vertex list.
         apf::Downward verts;
-        int vert_ct = m->getDownward(faces[i], 0, verts);
-        reorderCCW(verts, m->getType(e), i);
+        int vert_ct = getFaceVertsCCW(m, e, i, verts);
         verts[vert_ct] = verts[0]; // Make circular list.
 
         // Search for an exit face.
@@ -592,6 +555,7 @@ namespace pc {
           if (up == 1) {
             // There is empty space between this region and the next so tracing
             // stops here.
+            //FIXME: assert face is on geometry face
             return;
           } else if (m->getUpward(faces[i], 0) == e) {
             e = m->getUpward(faces[i], 1);
@@ -622,13 +586,19 @@ namespace pc {
         }
         e = opposite_rgn;
       }
+
+      if (e == e_old) {
+        std::cerr << "ERROR: No exit found for " << e << ".";
+        std::cerr << " LC = " << apf::getLinearCentroid(m, e) << std::endl;
+        return;
+      }
     }
     action(m, end);
   }
 
   /**
-   * @brief Fuzzily defragment shock elements. Mark elements neighboring shock
-   * elements as shock.
+   * @brief Defragment shock elements by raytracing from shock elements to
+   * 2nd order neighbors.
    * 
    * @param m APF Mesh.
    * @input-field "Shock_Param"
@@ -638,24 +608,49 @@ namespace pc {
   void defragmentShocksSerial(const ph::Input& in, apf::Mesh2* m) {
     apf::Field* Shock_Param = m->findField("Shock_Param");
 
+    class ShockPair {
+    public:
+      ShockPair(apf::MeshEntity* X, apf::MeshEntity* Y) {
+        if (X < Y) {
+          x = X, y = Y;
+        } else {
+          x = Y, y = X;
+        }
+      }
+      bool operator==(const ShockPair& other) const noexcept {
+        return x == other.x && y == other.y;
+      }
+      bool operator<(const ShockPair& other) const noexcept {
+        return x < other.x ? true : (y < other.y ? true : false);
+      }
+    private:
+      apf::MeshEntity *x, *y;
+    };
+
+    std::set<ShockPair> seen_pairs;
+
     apf::MeshIterator* it = m->begin(3);
     for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
       if (apf::getScalar(Shock_Param, e, 0) == ShockParam::SHOCK) {
-        double dist_max = getMaxRadius(m, e); // Max linear search distance.
-        serialBFS(m, 3, e, [dist_max](const BFSarg& arg) -> BFSresult {
+        serialBFS(m, 3, e, [](const BFSarg& arg) -> BFSresult {
           if (arg.distance > 2) return BFSresult::BREAK;
-          apf::Vector3 e_lc = apf::getLinearCentroid(arg.m, arg.e);
-          apf::Vector3 c_lc = apf::getLinearCentroid(arg.m, arg.c);
-          apf::Vector3 dist =  e_lc - c_lc;
-          // Only process elements within spacing distance.
-          return dist * dist < dist_max * dist_max ? BFSresult::ACT : BFSresult::CONTINUE;
-        }, [Shock_Param](const BFSarg& arg){
-          if (apf::getScalar(Shock_Param, arg.e, 0) == ShockParam::NONE) {
-            apf::setScalar(Shock_Param, arg.e, 0, ShockParam::FRAGMENT);
+          return BFSresult::ACT;
+        }, [Shock_Param, &seen_pairs](const BFSarg& arg){
+          if (arg.distance > 1 && apf::getScalar(Shock_Param, arg.e, 0) == ShockParam::SHOCK) {
+            ShockPair sp(arg.c, arg.e);
+            if (seen_pairs.find(sp) == seen_pairs.end()) {
+              seen_pairs.insert(sp);
+              rayTrace(arg.m, arg.c, arg.e, [Shock_Param](apf::Mesh* m, apf::MeshEntity* e) {
+                if (apf::getScalar(Shock_Param, e, 0) == ShockParam::NONE) {
+                  apf::setScalar(Shock_Param, e, 0, ShockParam::FRAGMENT);
+                }
+              });
+            }
           }
         });
       }
     }
+    m->end(it);
   }
 
   using Shocks = std::vector<std::vector<apf::MeshEntity*>>;
