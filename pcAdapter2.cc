@@ -475,6 +475,45 @@ namespace pc {
     return ind < 0 ? -1 : (ind > 0 ? 1 : 0);
   }
 
+  int edgeIndicator(apf::Mesh* m, const apf::Vector3& src, apf::MeshEntity* dst,
+                apf::MeshEntity* v1, apf::MeshEntity* v2) {
+    apf::Vector3 v3;
+    m->getPoint(dst, 0, v3);
+    return edgeIndicator(m, src, v3, v1, v2);
+  }
+
+  /**
+   * @brief Reorder `verts` to be counter-clockwise around the face normal
+   * (right-hand rule).
+   *
+   * If face is invalid for the given entity type, reorderCCW silently fails.
+   *
+   * @param verts An apf::Downward or statically allocated array of vertices.
+   * @param type The element type the face is on (tet, hex, prism, or pyramid).
+   * @param face Which face the verts are on (using the same scheme as
+   *             apf::Mesh::getDownward)
+   */
+  void reorderCCW(apf::Mesh* m, const apf::Vector3& e_lc,
+                  apf::Mesh::Type f_type, apf::MeshEntity** f_verts) {
+    if (f_type == apf::Mesh::TRIANGLE) {
+      if (edgeIndicator(m, e_lc, f_verts[2], f_verts[0], f_verts[1]) == -1) {
+        std::swap(f_verts[1], f_verts[2]);
+      }
+    } else if (f_type == apf::Mesh::QUAD) {
+      if (edgeIndicator(m, e_lc, f_verts[2], f_verts[0], f_verts[1]) == -1) {
+        std::swap(f_verts[1], f_verts[2]);
+      }
+      if (edgeIndicator(m, e_lc, f_verts[3], f_verts[1], f_verts[2]) == -1) {
+        std::swap(f_verts[2], f_verts[3]);
+      }
+      if (edgeIndicator(m, e_lc, f_verts[0], f_verts[2], f_verts[3]) == -1) {
+        std::swap(f_verts[3], f_verts[0]);
+      }
+    } else {
+      PCU_ALWAYS_ASSERT("reorderCCW: invalid face type" && false);
+    }
+  }
+
   constexpr int tet_face_verts_ccw[4][3] = {
     {0, 2, 1}, {0, 1, 3}, {1, 2, 3}, {0, 3, 2}
   };
