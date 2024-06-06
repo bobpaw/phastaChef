@@ -1,4 +1,5 @@
 #include <iostream>
+#include <functional>
 #include <PCU.h>
 #include <lionPrint.h>
 #include <gmi_null.h>
