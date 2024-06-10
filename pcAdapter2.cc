@@ -475,6 +475,78 @@ namespace pc {
     return ind < 0 ? -1 : (ind > 0 ? 1 : 0);
   }
 
+  class EdgeIndicatorCache {
+  // Geometrically defined constant for all simplex types.
+  static constexpr int maxEdges = 12;
+
+  public:
+    EdgeIndicatorCache() {
+      clear();
+    }
+
+    bool has(apf::MeshEntity *v1, apf::MeshEntity *v2) const {
+      for (int i = 0; i < maxEdges; ++i) {
+        if (edges[i].v1 == v1 && edges[i].v2 == v2 ||
+          edges[i].v1 == v2 && edges[i].v2 == v1) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    /**
+     * @brief Get a cached value.
+     * @pre has(v1, v2) == true.
+     */
+    int get(apf::MeshEntity *v1, apf::MeshEntity *v2) const {
+      for (int i = 0; i < maxEdges; ++i) {
+        if (edges[i].v1 == v1 && edges[i].v2 == v2) {
+          return inds[i];
+        } else if (edges[i].v1 == v2 && edges[i].v2 == v1) {
+          return -inds[i];
+        }
+      }
+      return 0;
+    }
+
+    /**
+     * @brief Add a value to the cache.
+     * @pre Fewer than 12 elements have been added.
+     */
+    void set(apf::MeshEntity *v1, apf::MeshEntity *v2, int ind) {
+      for (int i = 0; i < maxEdges; ++i) {
+        if (edges[i].v1 == 0 && edges[i].v2 == 0) {
+          edges[i].v1 = v1;
+          edges[i].v2 = v2;
+          inds[i] = ind;
+          break;
+        }
+      }
+    }
+
+    /**
+     * @brief Clear all data from the cache.
+     */
+    void clear() {
+      for (int i = 0; i < maxEdges; ++i) {
+        edges[i].v1 = edges[i].v2 = nullptr;
+        inds[i] = 0;
+      }
+    }
+  private:
+    struct { apf::MeshEntity *v1, *v2; } edges[maxEdges];
+    int inds[maxEdges];
+  };
+
+  int edgeIndicator(apf::Mesh* m, const apf::Vector3& src, const apf::Vector3& ray,
+    apf::MeshEntity* v1, apf::MeshEntity* v2, EdgeIndicatorCache& cache) {
+    if (!cache.has(v1, v2)) {
+      int ind = edgeIndicator(m, src, ray, v1, v2);
+      cache.set(v1, v2, ind);
+    }
+    return cache.get(v1, v2);
+  }
+
   constexpr int tet_face_verts_ccw[4][3] = {
     {0, 2, 1}, {0, 1, 3}, {1, 2, 3}, {0, 3, 2}
   };
@@ -510,6 +582,9 @@ namespace pc {
                 std::function<void(apf::Mesh* m, apf::MeshEntity* e)> action) {
     apf::Vector3 src = apf::getLinearCentroid(m, start),
                  dst = apf::getLinearCentroid(m, end);
+
+    EdgeIndicatorCache eicache;
+
     for (apf::MeshEntity* e = start, *e_old = e; e != end; e_old = e) {
       action(m, e);
       apf::MeshEntity* exit_edge = nullptr;
@@ -524,7 +599,7 @@ namespace pc {
         // Search for an exit face.
         bool exit_found = true;
         for (int j = 0; exit_found && j < vert_ct; ++j) {
-          int ind = edgeIndicator(m, src, dst, verts[j], verts[j + 1]);
+          int ind = edgeIndicator(m, src, dst, verts[j], verts[j + 1], eicache);
           if (ind == 0) {
             // Not the exit face, but may be an exit edge so remember it for later.
             apf::Downward edges;
