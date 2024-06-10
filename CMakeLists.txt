@@ -63,8 +63,6 @@ add_library(phastaChef STATIC
   pcError.cc
   pcShock.cc
 )
-set_target_properties(phastaChef PROPERTIES LINKER_LANGUAGE HAS_CXX)
-set_target_properties(phastaChef PROPERTIES LINKER_LANGUAGE Fortran)
 
 #chef
 target_link_libraries(phastaChef PUBLIC SCOREC::core)
