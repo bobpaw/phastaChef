@@ -79,9 +79,8 @@ target_link_libraries(phastaChef PUBLIC ${ARMADILLO_LIBRARIES})
 
 macro(setup_exe exename srcname)
 add_executable(${exename} ${srcname})
-target_link_libraries(${exename} PUBLIC phastaChef)
-set_target_properties(${exename} PROPERTIES LINKER_LANGUAGE HAS_CXX)
-set_target_properties(${exename} PROPERTIES LINKER_LANGUAGE Fortran)
+# Link to PHASTA_LIBS again to fix circular dependency between common/compressible.
+target_link_libraries(${exename} PUBLIC phastaChef ${PHASTA_LIBS})
 endmacro(setup_exe)
 
 setup_exe(chefPhasta_posix chef_phasta_posix.cc)
