@@ -5,6 +5,9 @@ enable_language(Fortran)
 enable_language(CXX)
 enable_language(C)
 
+include(FortranCInterface)
+FortranCInterface_VERIFY(CXX)
+
 execute_process(
   COMMAND git rev-parse HEAD
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -16,10 +19,10 @@ set(PHASTA_CHEF_ENABLED ON)
 enable_testing()
 include(CTest)
 set(MPIRUN "mpirun"
-  CACHE string
+  CACHE STRING
   "the mpirun or srun executable")
 set(MPIRUN_PROCFLAG "-np"
-  CACHE string
+  CACHE STRING
   "the command line flag to give process count to MPIRUN")
 set(PHASTA_SRC_DIR phasta CACHE FILEPATH "path to phasta source code")
 add_subdirectory(${PHASTA_SRC_DIR} ${CMAKE_BINARY_DIR}/phasta)
@@ -37,7 +40,13 @@ message(STATUS "PHASTAIC_LIBS ${PHASTAIC_LIBS}")
 find_package(phastaC PATHS ${CMAKE_BINARY_DIR})
 message(STATUS "PHASTAC_LIBS ${PHASTAC_LIBS}")
 
-if( NOT phastaIC_FOUND AND NOT phastaC_FOUND )
+if(phastaIC_FOUND)
+set(PHASTA_INCLUDE_DIRS ${PHASTAIC_INCLUDE_DIRS})
+set(PHASTA_LIBS ${PHASTAIC_LIBS})
+elseif(phastaC_FOUND)
+set(PHASTA_INCLUDE_DIRS ${PHASTAC_INCLUDE_DIRS})
+set(PHASTA_LIBS ${PHASTAC_LIBS})
+else()
  message(FATAL_ERROR "Neither the incompressible or compressible solver was found")
 endif()
 
@@ -45,50 +54,43 @@ find_library(ACUSOLVE_LIB libles)
 
 find_package(Armadillo REQUIRED)
 
-macro(setup_exe exename srcname IC)
-  set(src ${srcname}
-    pcWriteFiles.cc
-    pcUpdateMesh.cc
-    pcAdapter.cc
-    pcTimeDepMesh.cc
-    pcSmooth.cc
-    pcError.cc
-    pcShock.cc
-  )
+add_library(phastaChef STATIC
+  pcWriteFiles.cc
+  pcUpdateMesh.cc
+  pcAdapter.cc
+  pcTimeDepMesh.cc
+  pcSmooth.cc
+  pcError.cc
+  pcShock.cc
+)
 
-  add_executable(${exename} ${src})
-  set_target_properties(${exename} PROPERTIES HAS_CXX TRUE)
-  set_target_properties(${exename} PROPERTIES HAS_CXX TRUE)
-  set_target_properties(${exename} PROPERTIES LINKER_LANGUAGE Fortran)
-  set_target_properties(${exename} PROPERTIES LINKER_LANGUAGE Fortran)
+#chef
+target_link_libraries(phastaChef PUBLIC SCOREC::core)
 
-  #chef
-  target_link_libraries(${exename} PRIVATE SCOREC::core)
+#phasta
+include_directories(${PHASTA_INCLUDE_DIRS})
+target_link_libraries(phastaChef PUBLIC ${PHASTA_LIBS})
 
-  #phasta
-  if( ${IC} )
-    include_directories(${PHASTAIC_INCLUDE_DIRS})
-    target_link_libraries(${exename} PRIVATE ${PHASTAIC_LIBS})
-  else()
-    include_directories(${PHASTAC_INCLUDE_DIRS})
-    target_link_libraries(${exename} PRIVATE ${PHASTAC_LIBS})
-  endif()
+#armadillo
+include_directories(${ARMADILLO_INCLUDE_DIRS})
+target_link_libraries(phastaChef PUBLIC ${ARMADILLO_LIBRARIES})
 
-  #armadillo
-  include_directories(${ARMADILLO_INCLUDE_DIRS})
-  target_link_libraries(${exename} PRIVATE ${ARMADILLO_LIBRARIES})
+macro(setup_exe exename srcname)
+add_executable(${exename} ${srcname})
+# Link to PHASTA_LIBS again to fix circular dependency between common/compressible.
+target_link_libraries(${exename} PUBLIC phastaChef ${PHASTA_LIBS})
 endmacro(setup_exe)
 
-setup_exe(chefPhasta_posix chef_phasta_posix.cc ${phastaIC_FOUND})
-setup_exe(chefPhasta_stream chef_phasta_stream.cc ${phastaIC_FOUND})
-setup_exe(chefPhastaLoop_stream_ur chef_phasta_loop_stream_ur.cc ${phastaIC_FOUND})
-setup_exe(chefPhastaLoop_stream_adapt chef_phasta_adaptLoop.cc ${phastaIC_FOUND})
-setup_exe(chefPhastaLoop_files_adapt chef_phasta_adaptLoop_files.cc ${phastaIC_FOUND})
-setup_exe(chefPhastaLoop_sam_stream_adapt chef_phasta_sam_adaptLoop.cc ${phastaIC_FOUND})
-setup_exe(loopChefPhasta loopChefPhasta.cc ${phastaIC_FOUND})
-setup_exe(transferAndAdapter transferAndAdapter.cc ${phastaIC_FOUND})
-setup_exe(solutionProjection solutionProjection.cc ${phastaIC_FOUND})
-setup_exe(calcEfficiency calcEfficiency.cc ${phastaIC_FOUND})
-setup_exe(meshGrading meshGrading.cc ${phastaIC_FOUND})
+setup_exe(chefPhasta_posix chef_phasta_posix.cc)
+setup_exe(chefPhasta_stream chef_phasta_stream.cc)
+setup_exe(chefPhastaLoop_stream_ur chef_phasta_loop_stream_ur.cc)
+setup_exe(chefPhastaLoop_stream_adapt chef_phasta_adaptLoop.cc)
+setup_exe(chefPhastaLoop_files_adapt chef_phasta_adaptLoop_files.cc)
+setup_exe(chefPhastaLoop_sam_stream_adapt chef_phasta_sam_adaptLoop.cc)
+setup_exe(loopChefPhasta loopChefPhasta.cc)
+setup_exe(transferAndAdapter transferAndAdapter.cc)
+setup_exe(solutionProjection solutionProjection.cc)
+setup_exe(calcEfficiency calcEfficiency.cc)
+setup_exe(meshGrading meshGrading.cc)
 
 add_subdirectory(test)
