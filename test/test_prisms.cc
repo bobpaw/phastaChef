@@ -22,8 +22,8 @@ apf::Mesh2* createMesh(void) {
   gmi_model* g = gmi_load(".null");
   apf::Mesh2* m = apf::makeEmptyMdsMesh(g, 3, false);
 
-  const int prisms = 4 * 2, tets = prisms * 3, planeverts = 6,
-    verts = planeverts * 3;
+  const int prisms = 4 * 2, tets = prisms * 3 + 2, planeverts = 6,
+    verts = planeverts * 3 + 2;
 
   double coordsZ0[planeverts * 2] = {
     0, 0, 1, 0, 0, 1, 1, 1, 2, 0, 2, 1
@@ -40,6 +40,14 @@ apf::Mesh2* createMesh(void) {
     coords[(i + planeverts * 2) * 3 + 1] = coordsZ0[i * 2 + 1]; // y component
     coords[(i + planeverts * 2) * 3 + 2] = -1;
   }
+
+  coords[54] = 3;
+  coords[55] = 1;
+  coords[56] = 1;
+  coords[57] = -1;
+  coords[58] = 0;
+  coords[59] = -1;
+
   apf::Gid conn[tets * 4] = {
     0,6,7,8,/**/ 0,1,8,7,/**/ 0,1,2,8, // Prism 1
     1,3,8,9,/**/ 1,3,2,8,/**/ 1,8,7,9, // Prism 2
@@ -48,7 +56,8 @@ apf::Mesh2* createMesh(void) {
     12,0,1,2,/**/ 12,13,2,1,/**/ 12,13,14,2, // Prism 5
     13,15,2,3,/**/ 13,15,14,2,/**/ 13,2,1,3, // Prism 6
     13,1,4,3,/**/ 13,16,3,4,/**/ 13,16,15,3, // Prism 7
-    16,17,3,5,/**/ 16,17,15,3,/**/ 16,3,4,5 // Prism 8
+    16,17,3,5,/**/ 16,17,15,3,/**/ 16,3,4,5, // Prism 8
+    4,16,5,18, /*Start tet*/ 0,8,2,19 /*End tet*/
   };
 
   apf::GlobalToVert outmap;
@@ -80,7 +89,11 @@ void testRay(apf::Mesh* m, const char* fieldname, int start_id, int end_id, cons
   pc::rayTrace(m, tetsById[start_id], tetsById[end_id], [ray, &step, &steps](apf::Mesh* m, apf::MeshEntity* e) {
     apf::setScalar(ray, e, 0, step + 1);
     if (step < steps.size()) {
-      PCU_ALWAYS_ASSERT(e == tetsById[steps[step]]);
+      if (e != tetsById[steps[step]]) {
+        fprintf(stderr, "ERROR: Expected to be at element %p but actually at"
+          "element %p.\n", tetsById[steps[step]], e);
+        exit(EXIT_FAILURE);
+      }
     } else {
       fprintf(stderr, "Error: too many steps. Infinite loop?\n");
       exit(EXIT_FAILURE);
@@ -101,11 +114,13 @@ void testRays(apf::Mesh2* m) {
   for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
     int id = apf::getNumber(tet_id, e, 0, 0);
     tetsById[id] = e;
+    std::cout << "Tet " << id << ": " << e << std::endl;
   }
   m->end(it);
 
   testRay(m, "ray1", 10, 8, {10, 8});
   testRay(m, "ray2", 10, 0, {10, 8, 3, 5, 1, 0});
+  testRay(m, "ray3", 24, 25, {24, 10, 18, 4, 12, 25});
 }
 
 int main (int argc, char* argv[]) {
