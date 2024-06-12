@@ -560,8 +560,9 @@ namespace pc {
               // Not the exit face, but may be an exit edge so remember it for later.
               apf::MeshEntity* edge = getEdge(m, e, verts[j], verts[j + 1]);
               PCU_DEBUG_ASSERT(edge);
-              apf::Vector3 edge_lc = apf::getLinearCentroid(m, edge);
-              double edge_product = (edge_lc - src) * ray;
+              apf::Vector3 edge_lc = apf::getLinearCentroid(m, edge),
+                e_lc = apf::getLinearCentroid(m, e);
+              double edge_product = (edge_lc - e_lc).normalize() * ray;
               if (edge_product > 0 && exit_edge == nullptr || edge_product > exit_product && edge != entry_ent) {
                 exit_edge = edge, exit_lc = edge_lc, exit_product = edge_product;
               }
@@ -590,35 +591,52 @@ namespace pc {
         }
         entry_ent = exit_face;
       } else if (exit_edge) {
+#ifndef NDEBUG
         std::cout << "Performing exit edge analysis. exit_product: " << exit_product << std::endl;
+#endif
+        apf::Downward points;
+        m->getDownward(exit_edge, 0, points);
+        apf::Vector v1 = apf::getLinearCentroid(m, points[0]),
+          v2 = apf::getLinearCentroid(m, points[1]);
+        apf::Vector edge_plane_normal = apf::cross(v1 - src, v2 - src).normalize();
         apf::Adjacent rgns;
         m->getAdjacent(exit_edge, 3, rgns);
         PCU_DEBUG_ASSERT(rgns.size() > 1); // At least us and somebody else.
-        double max_dot = 0;
         apf::MeshEntity* opposite_rgn = nullptr;
+        double min_fandist = HUGE_VAL;
         for (int i = 0; i < rgns.size(); ++i) {
           if (rgns[i] != e) {
-            // FIXME: Avoid sqrt.
-            apf::Vector3 rgn_ray = apf::getLinearCentroid(m, rgns[i]) - src;
-            double dot = rgn_ray * ray;
-            if (dot > max_dot) {
+            apf::Vector3 rgn_lc = apf::getLinearCentroid(m, rgns[i]);
+            double fandist = std::abs((rgn_lc - v1) * edge_plane_normal);
+            double dir = (rgn_lc - apf::getLinearCentroid(m, e)) * ray;
+            // Choose regions in the direction of the ray which are closer
+            // to the fan.
+#ifndef NDEBUG
+            std::cout<<"Candidate "<<rgns[i]<<" in dir "<<dir<<" with fandist "<<fandist<<std::endl;
+#endif
+            if (dir > 0 && fandist < min_fandist) {
               opposite_rgn = rgns[i];
-              max_dot = dot;
+              min_fandist = fandist;
             }
           }
         }
-        if (visited.find(opposite_rgn) == visited.end()) {
+        if (opposite_rgn == nullptr) {
+          std::cout << "ERROR: No suitable element found." << std::endl;
+          return;
+        } else if (visited.find(opposite_rgn) == visited.end()) {
+#ifndef NDEBUG
           std::cout << "Choosing " << opposite_rgn << " as next element. ";
-          std::cout << "Product: " << max_dot << std::endl;
+          std::cout << "Fan distance: " << min_fandist << std::endl;
+#endif
           e = opposite_rgn;
           entry_ent = exit_edge;
         } else {
-          std::cerr << "ERROR: Loop detected from " << e << " to " << opposite_rgn << std::endl;
+          std::cout << "ERROR: Loop detected from " << e << " to " << opposite_rgn << std::endl;
           return;
         }
       } else {
-        std::cerr << "ERROR: No exit found for " << e << ".";
-        std::cerr << " LC = " << apf::getLinearCentroid(m, e) << std::endl;
+        std::cout << "ERROR: No exit found for " << e << ".";
+        std::cout << " LC = " << apf::getLinearCentroid(m, e) << std::endl;
         return;
       }
     }
@@ -669,7 +687,13 @@ namespace pc {
             ShockPair sp(arg.c, arg.e);
             if (seen_pairs.find(sp) == seen_pairs.end()) {
               seen_pairs.insert(sp);
+#ifndef NDEBUG
+              std::cout<<"Ray tracing "<<arg.c<<" to "<<arg.e<<std::endl;
+#endif
               rayTrace(arg.m, arg.c, arg.e, [Shock_Param](apf::Mesh* m, apf::MeshEntity* e) {
+#ifndef NDEBUG
+                std::cout<<"Tracing "<<e<<std::endl;
+#endif
                 if (apf::getScalar(Shock_Param, e, 0) == ShockParam::NONE) {
                   apf::setScalar(Shock_Param, e, 0, ShockParam::FRAGMENT);
                 }
