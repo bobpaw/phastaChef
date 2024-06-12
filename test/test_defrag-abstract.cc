@@ -2,8 +2,10 @@
 #include <random>
 #include <iostream>
 #include <chrono>
+#include <fstream>
 
 #include <apfMesh2.h>
+#include <apfNumbering.h>
 #include <apfShape.h>
 #include <PCU.h>
 #include <lionPrint.h>
@@ -144,6 +146,19 @@ int main (int argc, char* argv[]) {
   m = apf::loadMdsMesh(in.modelFileName.c_str(), in.meshFileName.c_str());
   ma::runUniformRefinement(m);
   m->verify();
+
+  apf::Numbering *elm_id = apf::numberOwnedDimension(m, "elm_id", 3);
+  apf::writeVtkFiles("td_mesh.vtk", m);
+  {
+    std::ofstream outfile("mesh_elms.txt");
+    outfile<<"id,lc,handle"<<std::endl;
+    apf::MeshIterator* it = m->begin(3);
+    for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
+      int id = apf::getNumber(elm_id, e, 0, 0);
+      apf::Vector3 lc = apf::getLinearCentroid(m,e);
+      outfile << id << ',' << lc << ',' << e << std::endl;
+    }
+  }
 
   int fragmentation;
 
