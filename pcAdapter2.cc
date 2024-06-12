@@ -344,10 +344,8 @@ namespace pc {
    * @param action The action to perform on entities where `check()` returns
    *               BFSresult::ACT.
    */
-	void serialBFS(apf::Mesh* m, int dim, BFScheck check, BFSaction action) {
-    // Bridge through points by default.
-    int bridgeDim = 0;
-    if (dim == 0) bridgeDim = 1;
+	void serialBFS(apf::Mesh* m, int dim, int bridgeDim, BFScheck check, BFSaction action) {
+    PCU_DEBUG_ASSERT(dim != bridgeDim);
 
     std::unordered_set<apf::MeshEntity*> visited(m->count(dim));
     BFSarg arg = (BFSarg){m, nullptr, nullptr, 0, 0};
@@ -412,10 +410,9 @@ namespace pc {
    * @param action The action to perform on entities where `check()` returns
                    BFSresult::ACT.
    */
-  void serialBFS(apf::Mesh* m, int dim, apf::MeshEntity* e, BFScheck check,
+  void serialBFS(apf::Mesh* m, int dim, int bridgeDim, apf::MeshEntity* e, BFScheck check,
                  BFSaction action) {
-    int bridgeDim = 0;
-    if (dim == 0) bridgeDim = 1;
+    PCU_DEBUG_ASSERT(dim != bridgeDim);
 
     std::set<apf::MeshEntity*> visited;
     BFSarg arg = (BFSarg){m, e, e, 0, 0};
@@ -461,18 +458,18 @@ namespace pc {
    * @return 0 given trajectory through edge, and 1
    * @return 1 given trajectory toward inside of face.
    */
-  int edgeIndicator(apf::Mesh* m, const apf::Vector3& src, const apf::Vector3& dst,
+  int edgeIndicator(apf::Mesh* m, const apf::Vector3& src, const apf::Vector3& ray,
                 apf::MeshEntity* v1, apf::MeshEntity* v2) {
     PCU_DEBUG_ASSERT(v1 != v2);
     PCU_DEBUG_ASSERT(m->getType(v1) == apf::Mesh::VERTEX);
     PCU_DEBUG_ASSERT(m->getType(v2) == apf::Mesh::VERTEX);
     apf::Vector3 v1pos = apf::getLinearCentroid(m, v1),
                  v2pos = apf::getLinearCentroid(m, v2);
-    apf::Vector3 normal = apf::cross(v1pos - src, v2pos - src);
-    double ind = normal * (dst - src);
-    double tol = 1e-15;
-    if (-tol < ind && ind < tol) return 0;
-    return ind < 0 ? -1 : (ind > 0 ? 1 : 0);
+    apf::Vector3 normal = apf::cross(v1pos - src, v2pos - src).normalize();
+    double ind = normal * ray;
+    double tol = 1e-14;
+    if (std::abs(ind) < tol) return 0;
+    return ind < 0 ? -1 : 1;
   }
 
   constexpr int tet_face_verts_ccw[4][3] = {
@@ -496,6 +493,23 @@ namespace pc {
   }
 
   /**
+   * @brief Get the edge on element e containing p1 and p2.
+   */
+  apf::MeshEntity* getEdge(apf::Mesh* m, apf::MeshEntity* e, apf::MeshEntity* p1, apf::MeshEntity* p2) {
+    apf::Downward edges;
+    int edge_ct = m->getDownward(e, 1, edges);
+    for (int i = 0; i < edge_ct; ++i) {
+      apf::Downward edge_verts;
+      m->getDownward(edges[i], 0, edge_verts);
+      if (edge_verts[0] == p1 && edge_verts[1] == p2 ||
+          edge_verts[1] == p1 && edge_verts[0] == p2) {
+        return edges[i];
+      }
+    }
+    return nullptr;
+  }
+
+  /**
    * @brief Perform an `action` on elements intersected by a ray from `start` to
    * `end`.
    *
@@ -509,65 +523,74 @@ namespace pc {
   void rayTrace(apf::Mesh* m, apf::MeshEntity* start, apf::MeshEntity* end,
                 std::function<void(apf::Mesh* m, apf::MeshEntity* e)> action) {
     apf::Vector3 src = apf::getLinearCentroid(m, start),
-                 dst = apf::getLinearCentroid(m, end);
-    for (apf::MeshEntity* e = start, *e_old = e; e != end; e_old = e) {
+                 dst = apf::getLinearCentroid(m, end),
+                 ray = (dst - src).normalize();
+
+    // Cached exit_edge information.
+    apf::MeshEntity* exit_edge = nullptr;
+    apf::Vector3 exit_lc(0, 0, 0);
+    double exit_product = 0;
+
+    // Cached entry information.
+    apf::MeshEntity* entry_ent = nullptr;
+
+    std::set<apf::MeshEntity*> visited;
+
+    for (apf::MeshEntity* e = start; e != end;) {
       action(m, e);
-      apf::MeshEntity* exit_edge = nullptr;
+      visited.insert(e);
+
+      apf::MeshEntity* exit_face = nullptr;
+      exit_edge = nullptr;
+
       apf::Downward faces;
       int face_ct = m->getDownward(e, 2, faces);
-      for (int i = 0; i < face_ct; ++i) {
-        // Construct vertex list.
-        apf::Downward verts;
-        int vert_ct = getFaceVertsCCW(m, e, i, verts);
-        verts[vert_ct] = verts[0]; // Make circular list.
+      for (int i = 0; exit_face == nullptr && i < face_ct; ++i) {
+        if (faces[i] != entry_ent) {
+          // Construct vertex list.
+          apf::Downward verts;
+          int vert_ct = getFaceVertsCCW(m, e, i, verts);
+          verts[vert_ct] = verts[0]; // Make circular list.
 
-        // Search for an exit face.
-        bool exit_found = true;
-        for (int j = 0; exit_found && j < vert_ct; ++j) {
-          int ind = edgeIndicator(m, src, dst, verts[j], verts[j + 1]);
-          if (ind == 0) {
-            // Not the exit face, but may be an exit edge so remember it for later.
-            apf::Downward edges;
-            int edge_ct = m->getDownward(faces[i], 1, edges);
-            for (int k = 0; k < edge_ct; ++k) {
-              apf::Downward edge_verts;
-              m->getDownward(edges[k], 0, edge_verts);
-              if (edge_verts[0] == verts[j] && edge_verts[1] == verts[j+1] ||
-                  edge_verts[1] == verts[j] && edge_verts[0] == verts[j+1]) {
-                // exit edge has positive dot product while entry edge will
-                // have negative dot product. this case will happen on non-tet
-                // elements.
-                apf::Vector3 k_lc = apf::getLinearCentroid(m, edges[k]);
-                if ((dst - src) * (k_lc - src) > 0) {
-                  exit_edge = edges[k];
-                  break;
-                }
+          // Search for an exit face.
+          exit_face = faces[i]; // Assume this is the exit face.
+          for (int j = 0; j < vert_ct; ++j) {
+            int ind = edgeIndicator(m, src, ray, verts[j], verts[j + 1]);
+            if (ind == 0) {
+              // Not the exit face, but may be an exit edge so remember it for later.
+              apf::MeshEntity* edge = getEdge(m, e, verts[j], verts[j + 1]);
+              PCU_DEBUG_ASSERT(edge);
+              apf::Vector3 edge_lc = apf::getLinearCentroid(m, edge);
+              double edge_product = (edge_lc - src) * ray;
+              if (edge_product > 0 && exit_edge == nullptr || edge_product > exit_product && edge != entry_ent) {
+                exit_edge = edge, exit_lc = edge_lc, exit_product = edge_product;
               }
+              exit_face = nullptr;
+            } else if (ind == -1) {
+              exit_face = nullptr;
+              break;
             }
-            exit_found = false;
-          } else if (ind == -1) exit_found = false;
-        }
-
-        if (exit_found) {
-          exit_edge = nullptr;
-          int up = m->countUpward(faces[i]);
-          PCU_DEBUG_ASSERT(up <= 2);
-          if (up == 1) {
-            // There is empty space between this region and the next so tracing
-            // stops here.
-            //FIXME: assert face is on geometry face
-            return;
-          } else if (m->getUpward(faces[i], 0) == e) {
-            e = m->getUpward(faces[i], 1);
-          } else {
-            PCU_DEBUG_ASSERT(m->getUpward(faces[i], 1) == e);
-            e = m->getUpward(faces[i], 0);
           }
-          break;
         }
       }
 
-      if (exit_edge != nullptr) {
+      if (exit_face) {
+        int up = m->countUpward(exit_face);
+        PCU_DEBUG_ASSERT(up <= 2);
+        if (up == 1) {
+          // There is empty space between this region and the next so tracing
+          // stops here.
+          PCU_ALWAYS_ASSERT(m->getModelType(m->toModel(exit_face)) == 2);
+          return;
+        } else if (m->getUpward(exit_face, 0) == e) {
+          e = m->getUpward(exit_face, 1);
+        } else {
+          PCU_DEBUG_ASSERT(m->getUpward(exit_face, 1) == e);
+          e = m->getUpward(exit_face, 0);
+        }
+        entry_ent = exit_face;
+      } else if (exit_edge) {
+        std::cout << "Performing exit edge analysis. exit_product: " << exit_product << std::endl;
         apf::Adjacent rgns;
         m->getAdjacent(exit_edge, 3, rgns);
         PCU_DEBUG_ASSERT(rgns.size() > 1); // At least us and somebody else.
@@ -575,19 +598,25 @@ namespace pc {
         apf::MeshEntity* opposite_rgn = nullptr;
         for (int i = 0; i < rgns.size(); ++i) {
           if (rgns[i] != e) {
+            // FIXME: Avoid sqrt.
             apf::Vector3 rgn_ray = apf::getLinearCentroid(m, rgns[i]) - src;
-            // FIXME: Find something that doesn't rely on sqrt.
-            double dot = ((dst - src) * rgn_ray)/rgn_ray.getLength();
+            double dot = rgn_ray * ray;
             if (dot > max_dot) {
               opposite_rgn = rgns[i];
               max_dot = dot;
             }
           }
         }
-        e = opposite_rgn;
-      }
-
-      if (e == e_old) {
+        if (visited.find(opposite_rgn) == visited.end()) {
+          std::cout << "Choosing " << opposite_rgn << " as next element. ";
+          std::cout << "Product: " << max_dot << std::endl;
+          e = opposite_rgn;
+          entry_ent = exit_edge;
+        } else {
+          std::cerr << "ERROR: Loop detected from " << e << " to " << opposite_rgn << std::endl;
+          return;
+        }
+      } else {
         std::cerr << "ERROR: No exit found for " << e << ".";
         std::cerr << " LC = " << apf::getLinearCentroid(m, e) << std::endl;
         return;
@@ -632,7 +661,7 @@ namespace pc {
     apf::MeshIterator* it = m->begin(3);
     for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
       if (apf::getScalar(Shock_Param, e, 0) == ShockParam::SHOCK) {
-        serialBFS(m, 3, e, [](const BFSarg& arg) -> BFSresult {
+        serialBFS(m, 3, 1, e, [](const BFSarg& arg) -> BFSresult {
           if (arg.distance > 2) return BFSresult::BREAK;
           return BFSresult::ACT;
         }, [Shock_Param, &seen_pairs](const BFSarg& arg){
@@ -651,6 +680,8 @@ namespace pc {
       }
     }
     m->end(it);
+
+    std::cout << "Ray traced " << seen_pairs.size() << " pairs." << std::endl;
   }
 
   using Shocks = std::vector<std::vector<apf::MeshEntity*>>;
@@ -685,7 +716,7 @@ namespace pc {
 		int current_component = -1;
 
 		serialBFS(
-				m, 3,
+				m, 3, 0,
 				[Shock_Param, pc_cs_bfs](const BFSarg& arg) -> BFSresult {
 					apf::Vector3 v;
 					apf::getVector(pc_cs_bfs, arg.e, 0, v);
