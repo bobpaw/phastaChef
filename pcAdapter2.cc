@@ -472,8 +472,22 @@ namespace pc {
     return ind < 0 ? -1 : 1;
   }
 
+  // FIXME: Hard vertex maps.
   constexpr int tet_face_verts_ccw[4][3] = {
     {0, 2, 1}, {0, 1, 3}, {1, 2, 3}, {0, 3, 2}
+  };
+
+  constexpr int hex_face_verts_ccw[6][4] = {
+    {0, 3, 2, 1}, {0, 1, 5, 4}, {1, 2, 6, 5},
+    {2, 3, 7, 6}, {0, 4, 7, 3}, {4, 5, 6, 7}
+  };
+
+	constexpr int prism_face_verts_ccw[5][4] = {
+    {0, 2, 1, -1}, {0, 1, 4, 3}, {1, 2, 5, 4}, {0, 3, 5, 2}, {3, 4, 5, -1}
+  };
+
+	constexpr int pyramid_face_verts_ccw[5][4] = {
+    {0, 3, 2, 1}, {0, 1, 4, -1}, {1, 2, 4, -1}, {2, 3, 4, -1}, {0, 4, 3, -1}
   };
 
   int getFaceVertsCCW(apf::Mesh* m, apf::MeshEntity* e, int face,
@@ -486,6 +500,21 @@ namespace pc {
         verts[i] = verts_tmp[tet_face_verts_ccw[face][i]];
       }
       return 3;
+    case apf::Mesh::HEX:
+      for (int i = 0; i < 4; ++i) {
+        verts[i] = verts_tmp[hex_face_verts_ccw[face][i]];
+      }
+      return 4;
+    case apf::Mesh::PRISM:
+      for (int i = 0; i < 4; ++i) {
+        verts[i] = verts_tmp[prism_face_verts_ccw[face][i]];
+      }
+      return prism_face_verts_ccw[face][3] == -1 ? 3 : 4;
+    case apf::Mesh::PYRAMID:
+      for (int i = 0; i < 4; ++i) {
+        verts[i] = verts_tmp[pyramid_face_verts_ccw[face][i]];
+      }
+      return pyramid_face_verts_ccw[face][3] == -1 ? 3 : 4;
     default:
       std::cerr << "ERROR: mesh type not implemented.\n" << std::endl;
       return 0;
