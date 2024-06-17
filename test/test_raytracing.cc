@@ -55,7 +55,7 @@ apf::Mesh2* createMesh(void) {
 
 namespace pc {
   int getFaceVertsCCW(apf::Mesh* m, apf::MeshEntity* e, int face, apf::MeshEntity** verts);
-  int edgeIndicator(apf::Mesh* m, const apf::Vector3& src, const apf::Vector3& dst,
+  int edgeIndicator(apf::Mesh* m, const apf::Vector3& src, const apf::Vector3& ray,
                 apf::MeshEntity* v1, apf::MeshEntity* v2);
 }
 
@@ -66,12 +66,12 @@ void testReorder(apf::Mesh* m) {
     apf::Downward faces;
     int face_ct = m->getDownward(tet, 2, faces);
     for (int i = 0; i < face_ct; ++i) {
-      apf::Vector3 face_lc = apf::getLinearCentroid(m, faces[i]);
+      apf::Vector3 face_ray = apf::getLinearCentroid(m, faces[i]) - lc;
       apf::Downward verts;
       int vert_ct = pc::getFaceVertsCCW(m, tet, i, verts); //m->getDownward(faces[i], 0, verts);
       verts[vert_ct] = verts[0];
       for (int j = 0; j < vert_ct; ++j) {
-        int ind = pc::edgeIndicator(m, lc, face_lc, verts[j], verts[j + 1]);
+        int ind = pc::edgeIndicator(m, lc, face_ray, verts[j], verts[j + 1]);
         if (ind != 1) {
           fprintf(stderr, "ERROR: Tet %p face %d (%p,%p,%p) "
                   "does not point outward!\n", tet, i, verts[0], verts[1], verts[2]);

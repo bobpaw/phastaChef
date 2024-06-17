@@ -92,3 +92,12 @@ if( ${phastaIC_FOUND} )
       )
   endif()
 endif()
+
+add_test(NAME test_raytracing
+  COMMAND "${CMAKE_CTEST_COMMAND}"
+  --build-and-test "${CMAKE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}"
+  --build-generator ${CMAKE_GENERATOR}
+  --build-makeprogram ${CMAKE_MAKE_PROGRAM}
+  --build-target test_raytracing
+  --build-exe-dir "${CMAKE_BINARY_DIR}/test"
+  --test-command test_raytracing)
