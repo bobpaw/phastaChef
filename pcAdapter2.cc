@@ -590,8 +590,8 @@ namespace pc {
                 vk = apf::getLinearCentroid(m, verts[j + 1]),
                 edge_v = vk - vj;
               apf::Matrix<2,2> mat;
-              mat[0][0] = ray[0]; mat[0][1] = edge_v[0];
-              mat[1][0] = ray[1]; mat[1][1] = edge_v[1];
+              mat[0][0] = ray[0]; mat[0][1] = -edge_v[0];
+              mat[1][0] = ray[1]; mat[1][1] = -edge_v[1];
               apf::Vector3 soln = vj - src;
               apf::Vector<2> soln_2(&soln[0]);
               constexpr double det_tol = 1.0e-14;
@@ -613,7 +613,7 @@ namespace pc {
                 apf::Matrix<2,2> mat_inv = apf::invert(mat);
                 apf::Vector<2> x = mat_inv * soln_2;
                 apf::Vector3 e_lc = apf::getLinearCentroid(m, e);
-                exit_intersection = edge_v * x[1];
+                exit_intersection = edge_v * x[1] + vj;
                 if (x[0] < 0 || (edge_v*x[1] - e_lc) * ray < 0) {
                   // Entry edge or edge in same plane as entry edge.
                   continue;
