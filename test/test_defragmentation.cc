@@ -1,10 +1,13 @@
 #include <cassert>
 #include <random>
 #include <iostream>
+#include <fstream>
 #include <chrono>
+#include <vector>
 
 #include <apfMesh2.h>
 #include <apfShape.h>
+#include <apfNumbering.h>
 #include <PCU.h>
 #include <lionPrint.h>
 #include <phstream.h>
@@ -21,18 +24,16 @@ namespace pc {
   void defragmentShocksSerial(const ph::Input& in, apf::Mesh2* m);
 }
 
-void print_usage(std::ostream& str, char* argv0) {
-  str << "USAGE: " << argv0 << " <modelFileName> <meshFileName>"
-      << " type:arg,arg,... <tol_alpha> <fragmentation>"
-      << std::endl;
-}
-
 int mockShockParam(apf::Mesh* m, pc::_test::ShockFunc* sf) {
   assert(m);
   assert(sf);
 
-  apf::Field* Shock_Param =
-      apf::createField(m, "Shock_Param", apf::SCALAR, apf::getConstant(3));
+  apf::Field* Shock_Param = m->findField("Shock_Param");
+  if (Shock_Param == nullptr) {
+    Shock_Param = apf::createField(m, "Shock_Param", apf::SCALAR,
+      apf::getConstant(3));
+    apf::zeroField(Shock_Param);
+  }
 
   int n = 0;
 
@@ -41,8 +42,6 @@ int mockShockParam(apf::Mesh* m, pc::_test::ShockFunc* sf) {
     if ((*sf)(m, e)) {
       apf::setScalar(Shock_Param, e, 0, pc::ShockParam::SHOCK);
       ++n;
-    } else {
-      apf::setScalar(Shock_Param, e, 0, pc::ShockParam::NONE);
     }
   }
   m->end(it);
@@ -94,6 +93,95 @@ double calculateTolerance(double alpha, apf::Mesh2* m) {
   return alpha * ma::getAverageEdgeLength(m);
 }
 
+class TestDefragArgs {
+public:
+  static void print_usage(std::ostream& str, char* argv0) {
+    str << "USAGE: " << argv0 << " -g <modelFileName> -m <meshFileName>"
+        << "-a <tol_alpha> -f <fragmentation> -s type:args,... [-d]"
+        << std::endl << std::endl;
+    str << "Multiple shock functions may be specified." << std::endl;
+    str << "Provide -d to assign element IDs and dump element info "
+           "to 'mesh_elms.txt'." << std::endl;
+  }
+
+  TestDefragArgs() {}
+
+  void parse(int argc, char* argv[]) {
+    bool g_given = false, m_given = false, a_given = false, f_given = false,
+      s_given = false;
+    for (int i = 1; i < argc; ++i) {
+      if (strcmp(argv[i], "-g") == 0) {
+        ++i;
+        if (i < argc) {
+          model_ = argv[i];
+          g_given = true;
+        } else {
+          throw std::invalid_argument("Expected argument after '-g'.");
+        }
+      } else if (strcmp(argv[i], "-m") == 0) {
+        ++i;
+        if (i < argc) {
+          mesh_ = argv[i];
+          m_given = true;
+        } else {
+          throw std::invalid_argument("Expected argument after '-m'.");
+        }
+      } else if (strcmp(argv[i], "-a") == 0) {
+        ++i;
+        if (i < argc) {
+          alpha_ = std::atof(argv[i]);
+          a_given = true;
+        } else {
+          throw std::invalid_argument("Expected argument after '-a'.");
+        }
+      } else if (strcmp(argv[i], "-f") == 0) {
+        ++i;
+        if (i < argc) {
+          fragmentation_ = std::atoi(argv[i]);
+          f_given = true;
+        } else {
+          throw std::invalid_argument("Expected argument after '-f'.");
+        }
+      } else if (strcmp(argv[i], "-s") == 0) {
+        ++i;
+        if (i < argc) {
+          shockfuncs_.push_back(argv[i]);
+        } else {
+          throw std::invalid_argument("Expected argument after '-s'.");
+        }
+      } else if (strcmp(argv[i], "-d") == 0) {
+        dump_ = true;
+      } else {
+        throw std::invalid_argument(std::string("Unknown argument '") + argv[i]
+          + "'.");
+      }
+    }
+
+    if (!g_given) throw std::invalid_argument("Missing required argument -g.");
+    if (!m_given) throw std::invalid_argument("Missing required argument -m.");
+    if (!a_given) throw std::invalid_argument("Missing required argument -a.");
+    if (!f_given) throw std::invalid_argument("Missing required argument -f.");
+    if (!s_given) throw std::invalid_argument("Missing required argument -s.");
+  }
+
+  int fragmentation(void) const noexcept { return fragmentation_; }
+  double alpha(void) const noexcept { return alpha_; }
+  bool dump(void) const noexcept { return dump_; }
+  const std::string& mesh(void) const noexcept { return mesh_; }
+  const std::string& model(void) const noexcept { return model_; }
+  const std::vector<std::string>& shockfuncs(void) const noexcept {
+    return shockfuncs_;
+  }
+  const std::string& shockfunc(int i) const { return shockfuncs_[i]; }
+
+private:
+  int fragmentation_{0};
+  double alpha_{0.0};
+  bool dump_{false};
+  std::string mesh_, model_;
+  std::vector<std::string> shockfuncs_;
+};
+
 int main (int argc, char* argv[]) {
   // MPI/PCU init?
   MPI_Init(&argc, &argv);
@@ -102,17 +190,21 @@ int main (int argc, char* argv[]) {
   // lion verbosity
   lion_set_verbosity(1);
 
-  if (argc != 6) {
-    print_usage(std::cerr, argv[0]);
+  TestDefragArgs args;
+
+  try {
+    args.parse(argc, argv);
+  } catch (const std::exception& e) {
+    std::cerr << "ERROR: " << e.what() << std::endl;
+    args.print_usage(std::cerr, argv[0]);
     return -1;
   }
 
   apf::Mesh2* m = nullptr;
-  pc::_test::ShockFunc* sf = nullptr;
 
   ph::Input in;
-  in.modelFileName = std::string(argv[1]);
-  in.meshFileName = std::string(argv[2]);
+  in.modelFileName = args.model();
+  in.meshFileName = args.mesh();
 
   // Init gmi.
   gmi_register_mesh();
@@ -120,20 +212,33 @@ int main (int argc, char* argv[]) {
   // Load mesh.
   m = apf::loadMdsMesh(in.modelFileName.c_str(), in.meshFileName.c_str());
 
-  int fragmentation;
+  if (args.dump()) {
+    apf::Numbering *elm_id = apf::numberOwnedDimension(m, "elm_id", 3);
+    apf::writeVtkFiles("mesh.vtk", m);
+    std::ofstream outfile("mesh_elms.txt");
+    outfile<<"id,lc,handle"<<std::endl;
+    apf::MeshIterator* it = m->begin(3);
+    for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
+      int id = apf::getNumber(elm_id, e, 0, 0);
+      apf::Vector3 lc = apf::getLinearCentroid(m,e);
+      outfile << id << ',' << lc << ',' << e << std::endl;
+    }
+    m->end(it);
+  }
 
+  double tol = calculateTolerance(args.alpha(), m);
+  std::cout << "Tolerance: " << tol << std::endl;
+
+  std::vector<pc::_test::ShockFunc*> shockfuncs;
   try {
-    double tol_alpha = std::atof(argv[4]);
-    double tol = calculateTolerance(tol_alpha, m);
-    fragmentation = std::atoi(argv[5]);
-
-    std::cout << "Tolerance: " << tol << std::endl;
-
-    sf = pc::_test::ShockFunc::makeFromString(argv[3], tol);
-		if (sf == nullptr) throw std::invalid_argument("ShockFunc argument");
-  } catch (const std::exception& e) {
+    for (int i = 0; i < args.shockfuncs().size(); ++i) {
+      pc::_test::ShockFunc* sf = pc::_test::ShockFunc::makeFromString(
+        args.shockfunc(i), tol);
+      shockfuncs.push_back(sf);
+    }
+  } catch (std::exception& e) {
     std::cerr << "ERROR: " << e.what() << std::endl;
-    print_usage(std::cerr, argv[0]);
+    args.print_usage(std::cerr, argv[0]);
     return -1;
   }
 
@@ -157,7 +262,10 @@ int main (int argc, char* argv[]) {
   std::cout << "Mesh elements (D=3): " << m->count(3) << std::endl;
 
   auto clock_start = std::chrono::steady_clock::now();
-  int n = mockShockParam(m, sf);
+  int n = 0;
+  for (int i = 0; i < shockfuncs.size(); ++i) {
+    n += mockShockParam(m, shockfuncs[i]);
+  }
   auto clock_end = std::chrono::steady_clock::now();
   std::cout << "Assigned " << n << " shock elements: " << my_tdiff(clock_start, clock_end) << " seconds." << std::endl;
 
@@ -166,7 +274,7 @@ int main (int argc, char* argv[]) {
 
   // Fragmentation step
   clock_start = std::chrono::steady_clock::now();
-  n = fragmentShockParam(m, fragmentation);
+  n = fragmentShockParam(m, args.fragmentation());
   clock_end = std::chrono::steady_clock::now();
   std::cout << "Fragmented (removed) " << n << " shock elements: " << my_tdiff(clock_start, clock_end) << " seconds." << std::endl;
 

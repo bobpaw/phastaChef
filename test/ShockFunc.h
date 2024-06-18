@@ -7,7 +7,6 @@
 
 namespace pc {
   namespace _test {
-
     /**
      * @brief A ShockFunc is a test fixture that returns true if the element is
      * detected as shock and false otherwise.
