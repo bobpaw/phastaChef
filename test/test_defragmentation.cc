@@ -14,6 +14,7 @@
 #include <gmi_mesh.h>
 #include <apfMDS.h>
 #include <phInput.h>
+#include <ma.h>
 #include <maSize.h>
 
 #include "pcShockParam.h"
@@ -97,11 +98,12 @@ class TestDefragArgs {
 public:
   static void print_usage(std::ostream& str, char* argv0) {
     str << "USAGE: " << argv0 << " -g <modelFileName> -m <meshFileName>"
-        << "-a <tol_alpha> -f <fragmentation> -s type:args,... [-d]"
+        << "-a <tol_alpha> -f <fragmentation> -s type:args,... [-d] [-r]"
         << std::endl << std::endl;
     str << "Multiple shock functions may be specified." << std::endl;
-    str << "Provide -d to assign element IDs and dump element info "
-           "to 'mesh_elms.txt'." << std::endl;
+    str << "-d\tAssign element IDs and dump info to 'mesh_elms.txt'."
+        << std::endl;
+    str << "-r\tDo initial uniform refinement." << std::endl;
   }
 
   TestDefragArgs() {}
@@ -146,11 +148,14 @@ public:
         ++i;
         if (i < argc) {
           shockfuncs_.push_back(argv[i]);
+          s_given = true;
         } else {
           throw std::invalid_argument("Expected argument after '-s'.");
         }
       } else if (strcmp(argv[i], "-d") == 0) {
         dump_ = true;
+      } else if (strcmp(argv[i], "-r") == 0) {
+        refine_ = true;
       } else {
         throw std::invalid_argument(std::string("Unknown argument '") + argv[i]
           + "'.");
@@ -167,6 +172,7 @@ public:
   int fragmentation(void) const noexcept { return fragmentation_; }
   double alpha(void) const noexcept { return alpha_; }
   bool dump(void) const noexcept { return dump_; }
+  bool refine(void) const noexcept { return refine_; }
   const std::string& mesh(void) const noexcept { return mesh_; }
   const std::string& model(void) const noexcept { return model_; }
   const std::vector<std::string>& shockfuncs(void) const noexcept {
@@ -177,7 +183,7 @@ public:
 private:
   int fragmentation_{0};
   double alpha_{0.0};
-  bool dump_{false};
+  bool dump_{false}, refine_{false};
   std::string mesh_, model_;
   std::vector<std::string> shockfuncs_;
 };
@@ -211,6 +217,11 @@ int main (int argc, char* argv[]) {
 
   // Load mesh.
   m = apf::loadMdsMesh(in.modelFileName.c_str(), in.meshFileName.c_str());
+
+  if (args.refine()) {
+    ma::runUniformRefinement(m);
+    m->verify();
+  }
 
   if (args.dump()) {
     apf::Numbering *elm_id = apf::numberOwnedDimension(m, "elm_id", 3);
