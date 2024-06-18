@@ -597,7 +597,11 @@ namespace pc {
               constexpr double det_tol = 1.0e-14;
               if (std::abs(apf::getDeterminant(mat)) < det_tol) {
                 // Singular matrix; non-invertible. Ray and edge are aligned.
-                if (ray * edge_v > 0) {
+                constexpr double dot_tol = 1.0e-14;
+                if (std::abs((vj - src).normalize() * ray - 1.0) >= dot_tol) {
+                  // Ray and edge are aligned but translated.
+                  continue;
+                } else if (ray * edge_v > 0) {
                   exit_vert = verts[j + 1];
                   exit_intersection = vk;
                 } else {
