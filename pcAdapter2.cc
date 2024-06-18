@@ -555,11 +555,6 @@ namespace pc {
                  dst = apf::getLinearCentroid(m, end),
                  ray = (dst - src).normalize();
 
-    // Cached exit_edge information.
-    apf::MeshEntity* exit_edge = nullptr;
-    apf::Vector3 exit_lc(0, 0, 0);
-    double exit_product = 0;
-
     // Cached entry information.
     apf::MeshEntity* entry_ent = nullptr;
 
@@ -569,8 +564,10 @@ namespace pc {
       action(m, e);
       visited.insert(e);
 
-      apf::MeshEntity* exit_face = nullptr;
-      exit_edge = nullptr;
+      // Exit entity information.
+      apf::MeshEntity *exit_edge = nullptr, *exit_vert = nullptr,
+        *exit_face = nullptr;
+      apf::Vector3 exit_intersection(0, 0, 0);
 
       apf::Downward faces;
       int face_ct = m->getDownward(e, 2, faces);
@@ -589,13 +586,48 @@ namespace pc {
               // Not the exit face, but may be an exit edge so remember it for later.
               apf::MeshEntity* edge = getEdge(m, e, verts[j], verts[j + 1]);
               PCU_DEBUG_ASSERT(edge);
-              apf::Vector3 edge_lc = apf::getLinearCentroid(m, edge),
-                e_lc = apf::getLinearCentroid(m, e);
-              double edge_product = (edge_lc - e_lc).normalize() * ray;
-              if (edge_product > 0 && exit_edge == nullptr || edge_product > exit_product && edge != entry_ent) {
-                exit_edge = edge, exit_lc = edge_lc, exit_product = edge_product;
+              apf::Vector3 vj = apf::getLinearCentroid(m, verts[j]),
+                vk = apf::getLinearCentroid(m, verts[j + 1]),
+                edge_v = vk - vj;
+              apf::Matrix<2,2> mat;
+              mat[0][0] = ray[0]; mat[0][1] = edge_v[0];
+              mat[1][0] = ray[1]; mat[1][1] = edge_v[1];
+              apf::Vector3 soln = vj - src;
+              apf::Vector<2> soln_2(&soln[0]);
+              constexpr double det_tol = 1.0e-14;
+              if (std::abs(apf::getDeterminant(mat)) < det_tol) {
+                // Singular matrix; non-invertible. Ray and edge are aligned.
+                if (ray * edge_v > 0) {
+                  exit_vert = verts[j + 1];
+                  exit_intersection = vk;
+                } else {
+                  PCU_DEBUG_ASSERT(ray * edge_v < 0);
+                  exit_vert = verts[j];
+                  exit_intersection = vj;
+                }
+              } else {
+                apf::Matrix<2,2> mat_inv = apf::invert(mat);
+                apf::Vector<2> x = mat_inv * soln_2;
+                apf::Vector3 e_lc = apf::getLinearCentroid(m, e);
+                exit_intersection = edge_v * x[1];
+                if (x[0] < 0 || (edge_v*x[1] - e_lc) * ray < 0) {
+                  // Entry edge or edge in same plane as entry edge.
+                  continue;
+                }
+                constexpr double x_tol = 1.0e-14;
+                if (std::abs(x[1]) < x_tol) {
+                  exit_vert = verts[j];
+                } else if (std::abs(x[1] - 1) < x_tol) {
+                  exit_vert = verts[j + 1];
+                } else if (0 <= x[1] && x[1] <= 1) {
+                  exit_edge = edge;
+                } else {
+                  // Intersection is on some other edge on this plane.
+                  continue;
+                }
               }
               exit_face = nullptr;
+              break;
             } else if (ind == -1) {
               exit_face = nullptr;
               break;
@@ -604,25 +636,48 @@ namespace pc {
         }
       }
 
-      if (exit_face) {
-        int up = m->countUpward(exit_face);
-        PCU_DEBUG_ASSERT(up <= 2);
-        if (up == 1) {
-          // There is empty space between this region and the next so tracing
-          // stops here.
-          PCU_ALWAYS_ASSERT(m->getModelType(m->toModel(exit_face)) == 2);
-          return;
-        } else if (m->getUpward(exit_face, 0) == e) {
-          e = m->getUpward(exit_face, 1);
-        } else {
-          PCU_DEBUG_ASSERT(m->getUpward(exit_face, 1) == e);
-          e = m->getUpward(exit_face, 0);
+      if (exit_vert) {
+        #ifndef NDEBUG
+        std::cout << "Performing exit vert analysis for " << exit_vert << "."
+                  <<std::endl;
+        #endif
+        apf::Adjacent rgns;
+        m->getAdjacent(exit_vert, 3, rgns);
+        PCU_DEBUG_ASSERT(rgns.size() > 1);
+        apf::MeshEntity* opposite_rgn = nullptr;
+        double max_dot = 0;
+        for (int i = 0; i < rgns.size(); ++i) {
+          if (rgns[i] == e) continue; // Don't waste cycles.
+          apf::Vector3 rgn_lc = apf::getLinearCentroid(m, rgns[i]),
+            rgn_ray = (rgn_lc - exit_intersection).normalize();
+          double dot = ray * rgn_ray;
+          #ifndef NDEBUG
+          std::cout << "Candidate region " << rgns[i] << " with dot product "
+                    << dot << "." << std::endl;
+          #endif
+          if (dot > max_dot) {
+            opposite_rgn = rgns[i];
+            max_dot = dot;
+          }
         }
-        entry_ent = exit_face;
+        if (opposite_rgn == nullptr) {
+          std::cout << "ERROR: No suitable exit element found." << std::endl;
+          return;
+        } else if (visited.find(opposite_rgn) == visited.end()) {
+          #ifndef NDEBUG
+          std::cout << "Choosing " << opposite_rgn << " as next element." << std::endl;
+          #endif
+          e = opposite_rgn;
+          entry_ent = exit_vert;
+        } else {
+          std::cout << "ERROR: Loop detected from " << e << " to "
+                    << opposite_rgn << std::endl;
+          return;
+        }
       } else if (exit_edge) {
-#ifndef NDEBUG
-        std::cout << "Performing exit edge analysis. exit_product: " << exit_product << std::endl;
-#endif
+        #ifndef NDEBUG
+        std::cout << "Performing exit edge analysis for "<<exit_edge<<"." << std::endl;
+        #endif
         apf::Downward points;
         m->getDownward(exit_edge, 0, points);
         apf::Vector v1 = apf::getLinearCentroid(m, points[0]),
@@ -637,12 +692,12 @@ namespace pc {
           if (rgns[i] != e) {
             apf::Vector3 rgn_lc = apf::getLinearCentroid(m, rgns[i]);
             double fandist = std::abs((rgn_lc - v1) * edge_plane_normal);
-            double dir = (rgn_lc - apf::getLinearCentroid(m, e)) * ray;
+            double dir = (rgn_lc - exit_intersection) * ray;
             // Choose regions in the direction of the ray which are closer
             // to the fan.
-#ifndef NDEBUG
+            #ifndef NDEBUG
             std::cout<<"Candidate "<<rgns[i]<<" in dir "<<dir<<" with fandist "<<fandist<<std::endl;
-#endif
+            #endif
             if (dir > 0 && fandist < min_fandist) {
               opposite_rgn = rgns[i];
               min_fandist = fandist;
@@ -653,16 +708,31 @@ namespace pc {
           std::cout << "ERROR: No suitable element found." << std::endl;
           return;
         } else if (visited.find(opposite_rgn) == visited.end()) {
-#ifndef NDEBUG
+          #ifndef NDEBUG
           std::cout << "Choosing " << opposite_rgn << " as next element. ";
           std::cout << "Fan distance: " << min_fandist << std::endl;
-#endif
+          #endif
           e = opposite_rgn;
           entry_ent = exit_edge;
         } else {
           std::cout << "ERROR: Loop detected from " << e << " to " << opposite_rgn << std::endl;
           return;
         }
+      } else if (exit_face) {
+        int up = m->countUpward(exit_face);
+        PCU_DEBUG_ASSERT(up <= 2);
+        if (up == 1) {
+          // There is empty space between this region and the next so tracing
+          // stops here.
+          PCU_ALWAYS_ASSERT(m->getModelType(m->toModel(exit_face)) == 2);
+          return;
+        } else if (m->getUpward(exit_face, 0) == e) {
+          e = m->getUpward(exit_face, 1);
+        } else {
+          PCU_DEBUG_ASSERT(m->getUpward(exit_face, 1) == e);
+          e = m->getUpward(exit_face, 0);
+        }
+        entry_ent = exit_face;
       } else {
         std::cout << "ERROR: No exit found for " << e << ".";
         std::cout << " LC = " << apf::getLinearCentroid(m, e) << std::endl;
@@ -716,13 +786,13 @@ namespace pc {
             ShockPair sp(arg.c, arg.e);
             if (seen_pairs.find(sp) == seen_pairs.end()) {
               seen_pairs.insert(sp);
-#ifndef NDEBUG
+              #ifndef NDEBUG
               std::cout<<"Ray tracing "<<arg.c<<" to "<<arg.e<<std::endl;
-#endif
+              #endif
               rayTrace(arg.m, arg.c, arg.e, [Shock_Param](apf::Mesh* m, apf::MeshEntity* e) {
-#ifndef NDEBUG
+                #ifndef NDEBUG
                 std::cout<<"Tracing "<<e<<std::endl;
-#endif
+                #endif
                 if (apf::getScalar(Shock_Param, e, 0) == ShockParam::NONE) {
                   apf::setScalar(Shock_Param, e, 0, ShockParam::FRAGMENT);
                 }
