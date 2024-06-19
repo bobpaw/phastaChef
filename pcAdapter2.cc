@@ -758,7 +758,7 @@ namespace pc {
           return;
         } else if (visited.find(opposite_rgn) == visited.end()) {
           #ifndef NDEBUG
-          std::cout << "Choosing " << opposite_rgn << " as next element. ";
+          std::cout << "Choosing " << opposite_rgn << " as next element." << std::endl;
           #endif
           e = opposite_rgn;
           entry_ent = exit_edge;
