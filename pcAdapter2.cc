@@ -564,6 +564,8 @@ namespace pc {
       action(m, e);
       visited.insert(e);
 
+      const apf::Vector3 e_lc = apf::getLinearCentroid(m, e);
+
       // Exit entity information.
       apf::MeshEntity *exit_edge = nullptr, *exit_vert = nullptr,
         *exit_face = nullptr;
@@ -571,7 +573,8 @@ namespace pc {
 
       apf::Downward faces;
       int face_ct = m->getDownward(e, 2, faces);
-      for (int i = 0; exit_face == nullptr && i < face_ct; ++i) {
+      for (int i = 0; exit_face == nullptr && exit_edge == nullptr
+        && exit_vert == nullptr && i < face_ct; ++i) {
         if (faces[i] != entry_ent) {
           // Construct vertex list.
           apf::Downward verts;
@@ -586,6 +589,7 @@ namespace pc {
               // Not the exit face, but may be an exit edge so remember it for later.
               apf::MeshEntity* edge = getEdge(m, e, verts[j], verts[j + 1]);
               PCU_DEBUG_ASSERT(edge);
+              if (entry_ent == edge) continue;
               apf::Vector3 vj = apf::getLinearCentroid(m, verts[j]),
                 vk = apf::getLinearCentroid(m, verts[j + 1]),
                 edge_v = vk - vj;
@@ -612,7 +616,6 @@ namespace pc {
               } else {
                 apf::Matrix<2,2> mat_inv = apf::invert(mat);
                 apf::Vector<2> x = mat_inv * soln_2;
-                apf::Vector3 e_lc = apf::getLinearCentroid(m, e);
                 exit_intersection = edge_v * x[1] + vj;
                 if (x[0] < 0 || (edge_v*x[1] - e_lc) * ray < 0) {
                   // Entry edge or edge in same plane as entry edge.
@@ -691,22 +694,64 @@ namespace pc {
         m->getAdjacent(exit_edge, 3, rgns);
         PCU_DEBUG_ASSERT(rgns.size() > 1); // At least us and somebody else.
         apf::MeshEntity* opposite_rgn = nullptr;
-        double min_fandist = HUGE_VAL;
+        std::set<apf::MeshEntity*> edge_faces; // Check existence in O(log(N)).
+        for (int i = 0; i < m->countUpward(exit_edge); ++i) {
+          edge_faces.insert(m->getUpward(exit_edge, i));
+        }
         for (int i = 0; i < rgns.size(); ++i) {
-          if (rgns[i] != e) {
-            apf::Vector3 rgn_lc = apf::getLinearCentroid(m, rgns[i]);
-            double fandist = std::abs((rgn_lc - v1) * edge_plane_normal);
-            double dir = (rgn_lc - exit_intersection) * ray;
-            // Choose regions in the direction of the ray which are closer
-            // to the fan.
-            #ifndef NDEBUG
-            std::cout<<"Candidate "<<rgns[i]<<" in dir "<<dir<<" with fandist "<<fandist<<std::endl;
-            #endif
-            if (dir > 0 && fandist < min_fandist) {
-              opposite_rgn = rgns[i];
-              min_fandist = fandist;
+          if (rgns[i] == e) continue;
+          apf::Downward rgn_faces;
+          int rgn_face_ct = m->getDownward(rgns[i], 2, rgn_faces);
+          apf::MeshEntity *face1 = nullptr, *face2 = nullptr;
+          for (int j = 0; j < rgn_face_ct; ++j) {
+            if (edge_faces.find(rgn_faces[j]) != edge_faces.end()) {
+              // This face is adjacent to the edge.
+              if (!face1) {
+                face1 = rgn_faces[j];
+              } else if (!face2) {
+                face2 = rgn_faces[j];
+              } else {
+                PCU_DEBUG_ASSERT(false && "Too many faces.");
+              }
             }
           }
+          apf::Vector3 face1_lc = apf::getLinearCentroid(m, face1),
+            face2_lc = apf::getLinearCentroid(m, face2),
+            face1_ray = face1_lc - src, face2_ray = face2_lc - src;
+          double face1_dist = (face1_ray * edge_plane_normal),
+            face2_dist = (face2_ray * edge_plane_normal);
+          constexpr double dist_tol = 1.0e-14;
+          if (std::abs(face1_dist) < dist_tol
+            || std::abs(face2_dist) < dist_tol) {
+            // Ray travels through face. Could pick this region or the other.
+            #ifndef NDEBUG
+            std::cout << "Ray distance indicates travel through face."
+                      << std::endl;
+            #endif
+            double dot = (apf::getLinearCentroid(m, rgns[i]) - e_lc) * ray;
+            if (dot > 0) {
+              opposite_rgn = rgns[i];
+              break;
+            }
+            #ifndef NDEBUG
+            else {
+              std::cout << "Negative dot product indicates backward travel"
+                           "; continuing search." << std::endl;
+            }
+            #endif
+          } else if (face1_dist * face2_dist < 0) {
+            // Negative product implies different signs.
+            // Different signs for face distance from edge plane implies
+            // this is the opposite region.
+            opposite_rgn = rgns[i];
+            break;
+          }
+          #ifndef NDEBUG
+          else {
+            std::cout << "Candidate " << rgns[i] << " has same-sign distances"
+                         "; continuing search." << std::endl;
+          }
+          #endif
         }
         if (opposite_rgn == nullptr) {
           std::cout << "ERROR: No suitable element found." << std::endl;
@@ -714,7 +759,6 @@ namespace pc {
         } else if (visited.find(opposite_rgn) == visited.end()) {
           #ifndef NDEBUG
           std::cout << "Choosing " << opposite_rgn << " as next element. ";
-          std::cout << "Fan distance: " << min_fandist << std::endl;
           #endif
           e = opposite_rgn;
           entry_ent = exit_edge;
