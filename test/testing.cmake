@@ -100,4 +100,5 @@ add_test(NAME test_raytracing
   --build-makeprogram ${CMAKE_MAKE_PROGRAM}
   --build-target test_raytracing
   --build-exe-dir "${CMAKE_BINARY_DIR}/test"
+  --build-noclean
   --test-command test_raytracing)
