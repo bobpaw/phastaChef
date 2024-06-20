@@ -100,5 +100,17 @@ add_test(NAME test_raytracing
   --build-makeprogram ${CMAKE_MAKE_PROGRAM}
   --build-target test_raytracing
   --build-exe-dir "${CMAKE_BINARY_DIR}/test"
+  --build-run-dir "${CMAKE_BINARY_DIR}/test"
   --build-noclean
   --test-command test_raytracing)
+
+add_test(NAME test_prisms
+  COMMAND "${CMAKE_CTEST_COMMAND}"
+  --build-and-test "${CMAKE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}"
+  --build-generator ${CMAKE_GENERATOR}
+  --build-makeprogram ${CMAKE_MAKE_PROGRAM}
+  --build-target test_prisms
+  --build-exe-dir "${CMAKE_BINARY_DIR}/test"
+  --build-run-dir "${CMAKE_BINARY_DIR}/test"
+  --build-noclean
+  --test-command test_prisms)
