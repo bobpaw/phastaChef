@@ -596,22 +596,31 @@ namespace pc {
               // ind == 0 implies edge and ray share a plane; change coordinate
               // system so z is constant, then solve with 2x2 matrix.
               apf::Matrix3x3 coord_change;
-              coord_change[0] = edge_v;
-              coord_change[1] = ray - apf::project(edge_v, ray);
+              coord_change[0] = edge_v.normalize();
+              coord_change[1] = ray - apf::project(coord_change[0], ray);
               coord_change[2] = apf::cross(coord_change[0], coord_change[1]);
               coord_change = apf::transpose(coord_change);
               constexpr double det_tol = 1.0e-14;
-              if (std::abs(apf::getDeterminant(coord_change)) < det_tol) {
+              double det = apf::getDeterminant(coord_change);
+              if (std::abs(det) < det_tol) {
                 // Ray and edge are aligned.
                 constexpr double dot_tol = 1.0e-14;
                 if (std::abs((vj - src).normalize() * ray - 1.0) >= dot_tol) {
                   // Ray and edge are aligned but translated.
                   continue;
                 } else if (ray * edge_v > 0) {
+                  if (entry_ent == verts[j + 1]) {
+                    // Found the entry vert.
+                    continue;
+                  }
                   exit_vert = verts[j + 1];
                   exit_intersection = vk;
                 } else {
                   PCU_DEBUG_ASSERT(ray * edge_v < 0);
+                  if (entry_ent == verts[j]) {
+                    // Found the entry vert.
+                    continue;
+                  }
                   exit_vert = verts[j];
                   exit_intersection = vj;
                 }
@@ -624,7 +633,7 @@ namespace pc {
               mat[1][0] = ray_til[1]; mat[1][1] = -e_til[1];
               apf::Vector3 soln = trans_mat * (vj - src);
               apf::Vector<2> soln_2(&soln[0]);
-              double det = apf::getDeterminant(mat);
+              det = apf::getDeterminant(mat);
               if (std::abs(det) < 1.0e-14) {
                 std::cout << "ERROR: Unexpected 0 determinant." << std::endl; // um
                 continue;
@@ -641,6 +650,8 @@ namespace pc {
               if (std::abs(x[1]) < x_tol) {
                 exit_vert = verts[j];
               } else if (std::abs(x[1] - 1) < x_tol) {
+                // Cannot be entry vert because intersection is oriented with
+                // ray.
                 exit_vert = verts[j + 1];
               } else if (0 <= x[1] && x[1] <= 1) {
                 exit_edge = edge;
