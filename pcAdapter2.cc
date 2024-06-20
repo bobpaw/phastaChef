@@ -713,9 +713,9 @@ namespace pc {
         #endif
         apf::Downward points;
         m->getDownward(exit_edge, 0, points);
-        apf::Vector v1 = apf::getLinearCentroid(m, points[0]),
+        apf::Vector3 v1 = apf::getLinearCentroid(m, points[0]),
           v2 = apf::getLinearCentroid(m, points[1]);
-        apf::Vector edge_plane_normal = apf::cross(v1 - src, v2 - src).normalize();
+        apf::Vector3 edge_plane_normal = apf::cross(v1 - src, v2 - src).normalize();
         apf::Adjacent rgns;
         m->getAdjacent(exit_edge, 3, rgns);
         PCU_DEBUG_ASSERT(rgns.size() > 1); // At least us and somebody else.
