@@ -1,8 +1,10 @@
 #include <iostream>
 #include <fstream>
+#include <functional>
 #include <queue>
 #include <vector>
 #include <unordered_set>
+#include <set>
 
 #include <apf.h>
 #include <apfMesh2.h>
@@ -39,7 +41,7 @@ namespace pc {
     // Iterate through every vertex.
     apf::MeshIterator* it = m->begin(0);
     for (apf::MeshEntity* v = m->iterate(it); v; v = m->iterate(it)) {
-      apf::Vector3 pg_sum;
+      apf::Vector3 pg_sum(0, 0, 0);
       apf::Adjacent adja;
       m->getAdjacent(v, 3, adja);
 
@@ -100,7 +102,7 @@ namespace pc {
     apf::Field* td_sol = m->findField("time derivative of solution");
     apf::Field* shk_det = apf::createFieldOn(m, "shk_det", apf::SCALAR);
 
-    apf::Vector3 pg_avg;
+    apf::Vector3 pg_avg(0, 0, 0);
     apf::NewArray<double> sol_tmp(apf::countComponents(sol));
     apf::NewArray<double> td_sol_tmp(apf::countComponents(td_sol));
 
@@ -113,7 +115,7 @@ namespace pc {
       apf::Vector3 sol_v(sol_tmp.begin() + 1);
 
       double a = sqrt(1.4*287 * sol_tmp[4]); // = speed of sound = sqrt(gamma*R)
-      double mach_n = (td_sol_tmp[0]/a + sol_v * pg_avg)/pg_avg.getLength();
+      double mach_n = (td_sol_tmp[0] + sol_v * pg_avg)/a/pg_avg.getLength();
 
       apf::setScalar(shk_det, v, 0, mach_n);
     }
@@ -193,6 +195,8 @@ namespace pc {
 			}
 		}
 
+		std::cout << "Read Shock.inp." << std::endl;
+
 		return sf;
 	}
 
@@ -232,7 +236,7 @@ namespace pc {
 
     // Propogate Shock_Param along mesh partition boundary.
     apf::Sharing* sharing = apf::getSharing(m);
-    apf::sharedReduction(Shock_Param, sharing, false,
+    apf::sharedReduction(Shock_Param, sharing, true,
                          apf::ReductionMax<double>());
   }
 
@@ -255,7 +259,9 @@ namespace pc {
     apf::NewArray<double> vms(apf::countComponents(VMS_error));
 
     apf::MeshIterator* it = m->begin(3);
-    for (apf::MeshEntity* e = m->iterate(it); e; m->iterate(it)) {
+    for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
+      apf::getComponents(P_Filt, e, 0, p.begin());
+      apf::getComponents(VMS_error, e, 0, vms.begin());
       apf::Vector3 vms_v(vms.begin() + 1);
       if (!(filt.checkPressure(p[3]) && filt.checkVMS(vms_v.getLength()))) {
         apf::setScalar(Shock_Param, e, 0, ShockParam::NONE);
@@ -283,9 +289,11 @@ namespace pc {
    */
   void detectShocksSerial(const ph::Input& in, apf::Mesh2* m) {
     apf::Field* PG_avg = smoothP_Filt(m);
+    std::cout << "Smoothed P_Filt." << std::endl;
 
     // Calculate normal mach number.
     apf::Field* shk_det = calcNormalMach(m);
+    std::cout << "Calculated normal mach number." << std::endl;
 
     // Shock_Param is a scalar indicator (1 or 0) field on 3D elements.
     apf::Field* Shock_Param = apf::createField(m, "Shock_Param", apf::SCALAR,
@@ -297,12 +305,17 @@ namespace pc {
       apf::setScalar(Shock_Param, e, 0, ShockParam::NONE);
     }
     m->end(it);
+    std::cout << "Initialized Shock_Param." << std::endl;
 
     // Find shock line using IVT for edges.
     locateShockEdges(m, shk_det, Shock_Param);
+    std::cout << "Located shock edges." << std::endl;
+
+    apf::writeVtkFiles("shock_located.vtk", m);
 
     // Filter Shock_Param using pressure/vms error.
     filterShockParam(m, Shock_Param, ShockFilter::ReadFile("Shock.inp"));
+    std::cout << "Filtered Shock_Param." << std::endl;
 
     // Destroy intermediate fields.
     apf::destroyField(shk_det);
@@ -331,10 +344,8 @@ namespace pc {
    * @param action The action to perform on entities where `check()` returns
    *               BFSresult::ACT.
    */
-	void serialBFS(apf::Mesh* m, int dim, BFScheck check, BFSaction action) {
-    // Bridge through points by default.
-    int bridgeDim = 0;
-    if (dim == 0) bridgeDim = 1;
+	void serialBFS(apf::Mesh* m, int dim, int bridgeDim, BFScheck check, BFSaction action) {
+    PCU_DEBUG_ASSERT(dim != bridgeDim);
 
     std::unordered_set<apf::MeshEntity*> visited(m->count(dim));
     BFSarg arg = (BFSarg){m, nullptr, nullptr, 0, 0};
@@ -399,10 +410,9 @@ namespace pc {
    * @param action The action to perform on entities where `check()` returns
                    BFSresult::ACT.
    */
-  void serialBFS(apf::Mesh* m, int dim, apf::MeshEntity* e, BFScheck check,
+  void serialBFS(apf::Mesh* m, int dim, int bridgeDim, apf::MeshEntity* e, BFScheck check,
                  BFSaction action) {
-    int bridgeDim = 0;
-    if (dim == 0) bridgeDim = 1;
+    PCU_DEBUG_ASSERT(dim != bridgeDim);
 
     std::set<apf::MeshEntity*> visited;
     BFSarg arg = (BFSarg){m, e, e, 0, 0};
@@ -443,60 +453,432 @@ namespace pc {
   }
 
   /**
-   * Get the max radius of an entity -- that is, the distance between the \ref
-   * apf::getLinearCentroid "linear centroid" and the farthest point from the
-   * centroid.
-   *
-   * @param m An APF mesh on which `e` resides.
-   * @param e The entity to measure.
+   * @brief Edge indicator from R. Chorda et al. 2002.
+   * @return -1 given trajectory toward outside of face.
+   * @return 0 given trajectory through edge, and 1
+   * @return 1 given trajectory toward inside of face.
    */
-  double getMaxRadius(apf::Mesh* m, apf::MeshEntity* e) {
-    apf::Vector3 lc = apf::getLinearCentroid(m, e);
+  int edgeIndicator(apf::Mesh* m, const apf::Vector3& src, const apf::Vector3& ray,
+                apf::MeshEntity* v1, apf::MeshEntity* v2) {
+    PCU_DEBUG_ASSERT(v1 != v2);
+    PCU_DEBUG_ASSERT(m->getType(v1) == apf::Mesh::VERTEX);
+    PCU_DEBUG_ASSERT(m->getType(v2) == apf::Mesh::VERTEX);
+    apf::Vector3 v1pos = apf::getLinearCentroid(m, v1),
+                 v2pos = apf::getLinearCentroid(m, v2);
+    apf::Vector3 normal = apf::cross(v1pos - src, v2pos - src).normalize();
+    double ind = normal * ray;
+    double tol = 1e-14;
+    if (std::abs(ind) < tol) return 0;
+    return ind < 0 ? -1 : 1;
+  }
 
-    double radius = 0;
+  // FIXME: Hard vertex maps.
+  constexpr int tet_face_verts_ccw[4][3] = {
+    {0, 2, 1}, {0, 1, 3}, {1, 2, 3}, {0, 3, 2}
+  };
 
-    // Get points.
-    apf::Downward points;
-    int points_size = m->getDownward(e, 0, points);
-    for (int i = 0; i < points_size; ++i) {
-      apf::Vector3 p;
-      m->getPoint(points[i], 0, p);
-      double r = (p - lc).getLength();
-      radius = r > radius ? r : radius;
+  constexpr int hex_face_verts_ccw[6][4] = {
+    {0, 3, 2, 1}, {0, 1, 5, 4}, {1, 2, 6, 5},
+    {2, 3, 7, 6}, {0, 4, 7, 3}, {4, 5, 6, 7}
+  };
+
+	constexpr int prism_face_verts_ccw[5][4] = {
+    {0, 2, 1, -1}, {0, 1, 4, 3}, {1, 2, 5, 4}, {0, 3, 5, 2}, {3, 4, 5, -1}
+  };
+
+	constexpr int pyramid_face_verts_ccw[5][4] = {
+    {0, 3, 2, 1}, {0, 1, 4, -1}, {1, 2, 4, -1}, {2, 3, 4, -1}, {0, 4, 3, -1}
+  };
+
+  int getFaceVertsCCW(apf::Mesh* m, apf::MeshEntity* e, int face,
+    apf::MeshEntity** verts) {
+    apf::Downward verts_tmp;
+    m->getDownward(e, 0, verts_tmp);
+    switch (m->getType(e)) {
+    case apf::Mesh::TET:
+      for (int i = 0; i < 3; ++i) {
+        verts[i] = verts_tmp[tet_face_verts_ccw[face][i]];
+      }
+      return 3;
+    case apf::Mesh::HEX:
+      for (int i = 0; i < 4; ++i) {
+        verts[i] = verts_tmp[hex_face_verts_ccw[face][i]];
+      }
+      return 4;
+    case apf::Mesh::PRISM:
+      for (int i = 0; i < 4; ++i) {
+        verts[i] = verts_tmp[prism_face_verts_ccw[face][i]];
+      }
+      return prism_face_verts_ccw[face][3] == -1 ? 3 : 4;
+    case apf::Mesh::PYRAMID:
+      for (int i = 0; i < 4; ++i) {
+        verts[i] = verts_tmp[pyramid_face_verts_ccw[face][i]];
+      }
+      return pyramid_face_verts_ccw[face][3] == -1 ? 3 : 4;
+    default:
+      std::cerr << "ERROR: mesh type not implemented.\n" << std::endl;
+      return 0;
     }
-
-    return radius;
   }
 
   /**
-   * @brief Fuzzily defragment shock elements. Mark elements neighboring shock
-   * elements as shock.
+   * @brief Get the edge on element e containing p1 and p2.
+   */
+  apf::MeshEntity* getEdge(apf::Mesh* m, apf::MeshEntity* e, apf::MeshEntity* p1, apf::MeshEntity* p2) {
+    apf::Downward edges;
+    int edge_ct = m->getDownward(e, 1, edges);
+    for (int i = 0; i < edge_ct; ++i) {
+      apf::Downward edge_verts;
+      m->getDownward(edges[i], 0, edge_verts);
+      if (edge_verts[0] == p1 && edge_verts[1] == p2 ||
+          edge_verts[1] == p1 && edge_verts[0] == p2) {
+        return edges[i];
+      }
+    }
+    return nullptr;
+  }
+
+  /**
+   * @brief Perform an `action` on elements intersected by a ray from `start` to
+   * `end`.
+   *
+   * Action always occurs for `start`, then ray tracing starts. Action is only
+   * run for `end` if there is path along the ray (i.e. not when there's empty
+   * space).
+   *
+   * @param start,end Mesh elements (dim=3).
+   * @param action An action to perform on mesh elements.
+   */
+  void rayTrace(apf::Mesh* m, apf::MeshEntity* start, apf::MeshEntity* end,
+                std::function<void(apf::Mesh* m, apf::MeshEntity* e)> action) {
+    apf::Vector3 src = apf::getLinearCentroid(m, start),
+                 dst = apf::getLinearCentroid(m, end),
+                 ray = (dst - src).normalize();
+
+    // Cached entry information.
+    apf::MeshEntity* entry_ent = nullptr;
+
+    std::set<apf::MeshEntity*> visited;
+
+    for (apf::MeshEntity* e = start; e != end;) {
+      action(m, e);
+      visited.insert(e);
+
+      const apf::Vector3 e_lc = apf::getLinearCentroid(m, e);
+
+      // Exit entity information.
+      apf::MeshEntity *exit_edge = nullptr, *exit_vert = nullptr,
+        *exit_face = nullptr;
+      apf::Vector3 exit_intersection(0, 0, 0);
+
+      apf::Downward faces;
+      int face_ct = m->getDownward(e, 2, faces);
+      for (int i = 0; exit_face == nullptr && exit_edge == nullptr
+        && exit_vert == nullptr && i < face_ct; ++i) {
+        if (faces[i] != entry_ent) {
+          // Construct vertex list.
+          apf::Downward verts;
+          int vert_ct = getFaceVertsCCW(m, e, i, verts);
+          verts[vert_ct] = verts[0]; // Make circular list.
+
+          // Search for an exit face.
+          exit_face = faces[i]; // Assume this is the exit face.
+          for (int j = 0; j < vert_ct; ++j) {
+            int ind = edgeIndicator(m, src, ray, verts[j], verts[j + 1]);
+            if (ind == 0) {
+              // Not the exit face, but may be an exit edge so remember it for later.
+              apf::MeshEntity* edge = getEdge(m, e, verts[j], verts[j + 1]);
+              PCU_DEBUG_ASSERT(edge);
+              if (entry_ent == edge) continue;
+              apf::Vector3 vj = apf::getLinearCentroid(m, verts[j]),
+                vk = apf::getLinearCentroid(m, verts[j + 1]),
+                edge_v = vk - vj;
+              // ind == 0 implies edge and ray share a plane; change coordinate
+              // system so z is constant, then solve with 2x2 matrix.
+              apf::Matrix3x3 coord_change;
+              coord_change[0] = edge_v.normalize();
+              coord_change[1] = ray - apf::project(coord_change[0], ray);
+              coord_change[2] = apf::cross(coord_change[0], coord_change[1]);
+              coord_change = apf::transpose(coord_change);
+              constexpr double det_tol = 1.0e-14;
+              double det = apf::getDeterminant(coord_change);
+              if (std::abs(det) < det_tol) {
+                // Ray and edge are aligned.
+                constexpr double dot_tol = 1.0e-14;
+                if (std::abs((vj - src).normalize() * ray - 1.0) >= dot_tol) {
+                  // Ray and edge are aligned but translated.
+                  continue;
+                } else if (ray * edge_v > 0) {
+                  if (entry_ent == verts[j + 1]) {
+                    // Found the entry vert.
+                    continue;
+                  }
+                  exit_vert = verts[j + 1];
+                  exit_intersection = vk;
+                } else {
+                  PCU_DEBUG_ASSERT(ray * edge_v < 0);
+                  if (entry_ent == verts[j]) {
+                    // Found the entry vert.
+                    continue;
+                  }
+                  exit_vert = verts[j];
+                  exit_intersection = vj;
+                }
+              }
+              apf::Matrix3x3 trans_mat = apf::invert(coord_change);
+              apf::Vector3 e_til = trans_mat * edge_v;
+              apf::Vector3 ray_til = trans_mat * ray;
+              apf::Matrix<2,2> mat;
+              mat[0][0] = ray_til[0]; mat[0][1] = -e_til[0];
+              mat[1][0] = ray_til[1]; mat[1][1] = -e_til[1];
+              apf::Vector3 soln = trans_mat * (vj - src);
+              apf::Vector<2> soln_2(&soln[0]);
+              det = apf::getDeterminant(mat);
+              if (std::abs(det) < 1.0e-14) {
+                std::cout << "ERROR: Unexpected 0 determinant." << std::endl; // um
+                continue;
+              }
+              apf::Matrix<2,2> mat_inv = apf::invert(mat);
+              apf::Vector<2> x = mat_inv * soln_2;
+              // Due to linearity, coord_change*e_til*x[1]=edge_v*x[1].
+              exit_intersection = edge_v * x[1] + vj;
+              if (x[0] < 0 || (exit_intersection - e_lc) * ray < 0) {
+                // Intersection is oriented away from ray.
+                continue;
+              }
+              constexpr double x_tol = 1.0e-14;
+              if (std::abs(x[1]) < x_tol) {
+                exit_vert = verts[j];
+              } else if (std::abs(x[1] - 1) < x_tol) {
+                // Cannot be entry vert because intersection is oriented with
+                // ray.
+                exit_vert = verts[j + 1];
+              } else if (0 <= x[1] && x[1] <= 1) {
+                exit_edge = edge;
+              } else {
+                // Intersection is on some other edge on this plane.
+                continue;
+              }
+              exit_face = nullptr;
+              break;
+            } else if (ind == -1) {
+              exit_face = nullptr;
+              break;
+            }
+          }
+        }
+      }
+
+      if (exit_vert) {
+        #ifndef NDEBUG
+        std::cout << "Performing exit vert analysis for " << exit_vert << "."
+                  <<std::endl;
+        #endif
+        apf::Adjacent rgns;
+        m->getAdjacent(exit_vert, 3, rgns);
+        PCU_DEBUG_ASSERT(rgns.size() > 1);
+        apf::MeshEntity* opposite_rgn = nullptr;
+        double max_dot = 0;
+        for (int i = 0; i < rgns.size(); ++i) {
+          if (rgns[i] == e) continue; // Don't waste cycles.
+          apf::Vector3 rgn_lc = apf::getLinearCentroid(m, rgns[i]),
+            rgn_ray = (rgn_lc - exit_intersection).normalize();
+          double dot = ray * rgn_ray;
+          #ifndef NDEBUG
+          std::cout << "Candidate region " << rgns[i] << " with dot product "
+                    << dot << "." << std::endl;
+          #endif
+          if (dot > max_dot) {
+            opposite_rgn = rgns[i];
+            max_dot = dot;
+          }
+        }
+        if (opposite_rgn == nullptr) {
+          std::cout << "ERROR: No suitable exit element found." << std::endl;
+          return;
+        } else if (visited.find(opposite_rgn) == visited.end()) {
+          #ifndef NDEBUG
+          std::cout << "Choosing " << opposite_rgn << " as next element." << std::endl;
+          #endif
+          e = opposite_rgn;
+          entry_ent = exit_vert;
+        } else {
+          std::cout << "ERROR: Loop detected from " << e << " to "
+                    << opposite_rgn << std::endl;
+          return;
+        }
+      } else if (exit_edge) {
+        #ifndef NDEBUG
+        std::cout << "Performing exit edge analysis for "<<exit_edge<<"." << std::endl;
+        #endif
+        apf::Downward points;
+        m->getDownward(exit_edge, 0, points);
+        apf::Vector3 v1 = apf::getLinearCentroid(m, points[0]),
+          v2 = apf::getLinearCentroid(m, points[1]);
+        apf::Vector3 edge_plane_normal = apf::cross(v1 - src, v2 - src).normalize();
+        apf::Adjacent rgns;
+        m->getAdjacent(exit_edge, 3, rgns);
+        PCU_DEBUG_ASSERT(rgns.size() > 1); // At least us and somebody else.
+        apf::MeshEntity* opposite_rgn = nullptr;
+        std::set<apf::MeshEntity*> edge_faces; // Check existence in O(log(N)).
+        for (int i = 0; i < m->countUpward(exit_edge); ++i) {
+          edge_faces.insert(m->getUpward(exit_edge, i));
+        }
+        for (int i = 0; i < rgns.size(); ++i) {
+          if (rgns[i] == e) continue;
+          apf::Downward rgn_faces;
+          int rgn_face_ct = m->getDownward(rgns[i], 2, rgn_faces);
+          apf::MeshEntity *face1 = nullptr, *face2 = nullptr;
+          for (int j = 0; j < rgn_face_ct; ++j) {
+            if (edge_faces.find(rgn_faces[j]) != edge_faces.end()) {
+              // This face is adjacent to the edge.
+              if (!face1) {
+                face1 = rgn_faces[j];
+              } else if (!face2) {
+                face2 = rgn_faces[j];
+              } else {
+                PCU_DEBUG_ASSERT(false && "Too many faces.");
+              }
+            }
+          }
+          apf::Vector3 face1_lc = apf::getLinearCentroid(m, face1),
+            face2_lc = apf::getLinearCentroid(m, face2),
+            face1_ray = face1_lc - src, face2_ray = face2_lc - src;
+          double face1_dist = (face1_ray * edge_plane_normal),
+            face2_dist = (face2_ray * edge_plane_normal);
+          constexpr double dist_tol = 1.0e-14;
+          if (std::abs(face1_dist) < dist_tol
+            || std::abs(face2_dist) < dist_tol) {
+            // Ray travels through face. Could pick this region or the other.
+            #ifndef NDEBUG
+            std::cout << "Ray distance indicates travel through face."
+                      << std::endl;
+            #endif
+            double dot = (apf::getLinearCentroid(m, rgns[i]) - e_lc) * ray;
+            if (dot > 0) {
+              opposite_rgn = rgns[i];
+              break;
+            }
+            #ifndef NDEBUG
+            else {
+              std::cout << "Negative dot product indicates backward travel"
+                           "; continuing search." << std::endl;
+            }
+            #endif
+          } else if (face1_dist * face2_dist < 0) {
+            // Negative product implies different signs.
+            // Different signs for face distance from edge plane implies
+            // this is the opposite region.
+            opposite_rgn = rgns[i];
+            break;
+          }
+          #ifndef NDEBUG
+          else {
+            std::cout << "Candidate " << rgns[i] << " has same-sign distances"
+                         "; continuing search." << std::endl;
+          }
+          #endif
+        }
+        if (opposite_rgn == nullptr) {
+          std::cout << "ERROR: No suitable element found." << std::endl;
+          return;
+        } else if (visited.find(opposite_rgn) == visited.end()) {
+          #ifndef NDEBUG
+          std::cout << "Choosing " << opposite_rgn << " as next element." << std::endl;
+          #endif
+          e = opposite_rgn;
+          entry_ent = exit_edge;
+        } else {
+          std::cout << "ERROR: Loop detected from " << e << " to " << opposite_rgn << std::endl;
+          return;
+        }
+      } else if (exit_face) {
+        int up = m->countUpward(exit_face);
+        PCU_DEBUG_ASSERT(up <= 2);
+        if (up == 1) {
+          // There is empty space between this region and the next so tracing
+          // stops here.
+          PCU_ALWAYS_ASSERT(m->getModelType(m->toModel(exit_face)) == 2);
+          return;
+        } else if (m->getUpward(exit_face, 0) == e) {
+          e = m->getUpward(exit_face, 1);
+        } else {
+          PCU_DEBUG_ASSERT(m->getUpward(exit_face, 1) == e);
+          e = m->getUpward(exit_face, 0);
+        }
+        entry_ent = exit_face;
+      } else {
+        std::cout << "ERROR: No exit found for " << e << ".";
+        std::cout << " LC = " << apf::getLinearCentroid(m, e) << std::endl;
+        return;
+      }
+    }
+    action(m, end);
+  }
+
+  /**
+   * @brief Defragment shock elements by raytracing from shock elements to
+   * 2nd order neighbors.
    * 
    * @param m APF Mesh.
    * @input-field "Shock_Param"
    * @output-field "Shock_Param"
+   * @TODO Think about the name.
    */
   void defragmentShocksSerial(const ph::Input& in, apf::Mesh2* m) {
     apf::Field* Shock_Param = m->findField("Shock_Param");
 
+    class ShockPair {
+    public:
+      ShockPair(apf::MeshEntity* X, apf::MeshEntity* Y) {
+        if (X < Y) {
+          x = X, y = Y;
+        } else {
+          x = Y, y = X;
+        }
+      }
+      bool operator==(const ShockPair& other) const noexcept {
+        return x == other.x && y == other.y;
+      }
+      bool operator<(const ShockPair& other) const noexcept {
+        return x < other.x ? true : (y < other.y ? true : false);
+      }
+    private:
+      apf::MeshEntity *x, *y;
+    };
+
+    std::set<ShockPair> seen_pairs;
+
     apf::MeshIterator* it = m->begin(3);
     for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
       if (apf::getScalar(Shock_Param, e, 0) == ShockParam::SHOCK) {
-        double dist_max = getMaxRadius(m, e); // Max linear search distance.
-        serialBFS(m, 3, e, [dist_max](const BFSarg& arg) -> BFSresult {
-          if (arg.distance > 1) return BFSresult::BREAK;
-          apf::Vector3 e_lc = apf::getLinearCentroid(arg.m, arg.e);
-          apf::Vector3 c_lc = apf::getLinearCentroid(arg.m, arg.c);
-          apf::Vector3 dist =  e_lc - c_lc;
-          // Only process elements within spacing distance.
-          return dist * dist < dist_max * dist_max ? BFSresult::ACT : BFSresult::CONTINUE;
-        }, [Shock_Param](const BFSarg& arg){
-          if (apf::getScalar(Shock_Param, arg.e, 0) == ShockParam::NONE) {
-            apf::setScalar(Shock_Param, arg.e, 0, ShockParam::FRAGMENT);
+        serialBFS(m, 3, 1, e, [](const BFSarg& arg) -> BFSresult {
+          if (arg.distance > 2) return BFSresult::BREAK;
+          return BFSresult::ACT;
+        }, [Shock_Param, &seen_pairs](const BFSarg& arg){
+          if (arg.distance > 1 && apf::getScalar(Shock_Param, arg.e, 0) == ShockParam::SHOCK) {
+            ShockPair sp(arg.c, arg.e);
+            if (seen_pairs.find(sp) == seen_pairs.end()) {
+              seen_pairs.insert(sp);
+              #ifndef NDEBUG
+              std::cout<<"Ray tracing "<<arg.c<<" to "<<arg.e<<std::endl;
+              #endif
+              rayTrace(arg.m, arg.c, arg.e, [Shock_Param](apf::Mesh* m, apf::MeshEntity* e) {
+                #ifndef NDEBUG
+                std::cout<<"Tracing "<<e<<std::endl;
+                #endif
+                if (apf::getScalar(Shock_Param, e, 0) == ShockParam::NONE) {
+                  apf::setScalar(Shock_Param, e, 0, ShockParam::FRAGMENT);
+                }
+              });
+            }
           }
         });
       }
     }
+    m->end(it);
+
+    std::cout << "Ray traced " << seen_pairs.size() << " pairs." << std::endl;
   }
 
   using Shocks = std::vector<std::vector<apf::MeshEntity*>>;
@@ -522,33 +904,37 @@ namespace pc {
 		// Initialize BFS field.
 		apf::MeshIterator* it = m->begin(3);
 		for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
-			apf::Vector3 bfs_trip(-1, -1, std::numeric_limits<double>::infinity());
+			apf::Vector3 bfs_trip(-1, -1, -1);
 			apf::setVector(pc_cs_bfs, e, 0, bfs_trip);
 		}
 		m->end(it);
 
 		Shocks shocks;
+		int current_component = -1;
 
 		serialBFS(
-				m, 3,
+				m, 3, 0,
 				[Shock_Param, pc_cs_bfs](const BFSarg& arg) -> BFSresult {
 					apf::Vector3 v;
 					apf::getVector(pc_cs_bfs, arg.e, 0, v);
-					return apf::getScalar(Shock_Param, arg.e, 0) == ShockParam::SHOCK &&
+					return apf::getScalar(Shock_Param, arg.e, 0) != ShockParam::NONE &&
 								 v.y() < 0 ? BFSresult::ACT : BFSresult::CONTINUE;
 				},
-				[pc_cs_bfs, &shocks](const BFSarg& arg) {
+				[pc_cs_bfs, &shocks, &current_component](const BFSarg& arg) {
+					// Check if this is a new shock component.
+					if (arg.component != current_component) {
+						shocks.emplace_back();
+						current_component = arg.component;
+					}
+
 					apf::Vector3 v;
 					apf::getVector(pc_cs_bfs, arg.e, 0, v);
 					v.x() = PCU_Comm_Self();
-					v.y() = arg.component;
+					v.y() = shocks.size();
 					v.z() = arg.distance;
 					apf::setVector(pc_cs_bfs, arg.e, 0, v);
 
-					if (arg.component >= shocks.size()) {
-						shocks.push_back(std::vector<apf::MeshEntity*>());
-						shocks[arg.component].push_back(arg.e);
-					}
+					shocks.back().push_back(arg.e);
 				});
 
 		// FIXME: Process part boundary (repeated triplet max.)
@@ -566,11 +952,13 @@ namespace pc {
    */
   void denoiseShocksSerial(const ph::Input& in, apf::Mesh2* m, Shocks& shocks, int minsize = 10) {
     apf::Field* Shock_Param = m->findField("Shock_Param");
+    apf::Field* pc_cs_bfs = m->findField("pc_cs_bfs");
 
     for (auto it = shocks.begin(); it != shocks.end();) {
       if (it->size() < minsize) {
         for (auto it2 = it->begin(); it2 != it->end(); ++it2) {
           apf::setScalar(Shock_Param, *it2, 0, ShockParam::NONE);
+          apf::setVector(pc_cs_bfs, *it2, 0, apf::Vector3(-1, -1, -1));
         }
         it = shocks.erase(it);
       } else {
