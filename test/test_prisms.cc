@@ -101,19 +101,20 @@ void testRay(apf::Mesh* m, const char* fieldname, int start_id, int end_id, cons
     apf::setScalar(ray, e, 0, step + 1);
     if (step < steps.size()) {
       if (e != tetsById[steps[step]]) {
-        fprintf(stderr, "ERROR: Expected to be at element %p but actually at"
-          " element %p.\n", tetsById[steps[step]], e);
+        std::cerr << "ERROR: Expected to be at element "
+                  << tetsById[steps[step]] << " but actually at element "
+                  << e << std::endl;
         exit(EXIT_FAILURE);
       }
     } else {
-      fprintf(stderr, "Error: too many steps. Infinite loop?\n");
+      std::cerr << "ERROR: Too many steps. Infinite loop?" << std::endl;
       exit(EXIT_FAILURE);
     }
     ++step;
   });
   if (step != steps.size()) {
     std::cerr << "ERROR: Ray " << fieldname << " stopped at step " << step << std::endl;
-    exit(1);
+    exit(EXIT_FAILURE);
   }
 }
 
@@ -125,7 +126,7 @@ void testRay(apf::Mesh* m, const char* fieldname, int start_id, int end_id) {
   pc::rayTrace(m, tetsById[start_id], tetsById[end_id], [ray, &step](apf::Mesh* m, apf::MeshEntity* e) {
     apf::setScalar(ray, e, 0, step + 1);
     if (step > tetsById.size()) {
-      fprintf(stderr, "Error: too many steps. Infinite loop?\n");
+      std::cerr << "ERROR: too many steps. Infinite loop?" << std::endl;
       exit(EXIT_FAILURE);
     }
     ++step;
@@ -147,11 +148,17 @@ void testRays(apf::Mesh2* m) {
 
   testRay(m, "ray1", 10, 8, {10, 8});
   testRay(m, "ray2", 10, 0, {10, 8, 3, 5, 1, 0});
-  testRay(m, "ray3", 24, 25, {24, 10, 18, 4, 12, 25});
-  testRay(m, "ray4", 15, 24);
+
+  // Ray passes through faces so it may not be deterministic.
+  testRay(m, "ray3", 24, 25/*, {24, 10, 18, 4, 12, 25}*/);
+
+  testRay(m, "ray4", 15, 24, {15, 20, 19, 23, 24});
   testRay(m, "ray5", 26, 17, {26, 17});
   testRay(m, "ray6", 26, 13, {26, 15, 17, 13});
-  testRay(m, "ray7", 27, 28);
+
+  // Real choices are 5 or 6. 5 has a slightly further centroid, so it seems
+  // more "aligned".
+  testRay(m, "ray7", 27, 28, {27, 5, 28});
 }
 
 int main (int argc, char* argv[]) {

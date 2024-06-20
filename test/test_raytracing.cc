@@ -86,19 +86,29 @@ void testReorder(apf::Mesh* m) {
 std::vector<apf::MeshEntity*> tetsById;
 
 void testRay(apf::Mesh* m, const char* fieldname, int start_id, int end_id, const std::vector<int>& steps) {
-	apf::Field* ray = apf::createField(m, fieldname, apf::SCALAR, apf::getConstant(3));
+  std::cout << "Testing ray " << fieldname << '.' << std::endl;
+  apf::Field* ray = apf::createField(m, fieldname, apf::SCALAR, apf::getConstant(3));
   apf::zeroField(ray);
-  int step = 1;
+  int step = 0;
   pc::rayTrace(m, tetsById[start_id], tetsById[end_id], [ray, &step, &steps](apf::Mesh* m, apf::MeshEntity* e) {
-    apf::setScalar(ray, e, 0, step);
-    if (step <= steps.size()) {
-      PCU_ALWAYS_ASSERT(e == tetsById[steps[step - 1]]);
+    apf::setScalar(ray, e, 0, step + 1);
+    if (step < steps.size()) {
+      if (e != tetsById[steps[step]]) {
+        std::cerr << "ERROR: Expected to be at element "
+                  << tetsById[steps[step]] << " but actually at element "
+                  << e << std::endl;
+        exit(EXIT_FAILURE);
+      }
     } else {
-      fprintf(stderr, "Error: too many steps. Infinite loop?\n");
+      std::cerr << "ERROR: Too many steps. Infinite loop?" << std::endl;
       exit(EXIT_FAILURE);
     }
     ++step;
   });
+  if (step != steps.size()) {
+    std::cerr << "ERROR: Ray " << fieldname << " stopped at step " << step << std::endl;
+    exit(EXIT_FAILURE);
+  }
 }
 
 void testRays(apf::Mesh2* m) {
@@ -109,6 +119,8 @@ void testRays(apf::Mesh2* m) {
 	for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
 		int id = apf::getNumber(tet_id, e, 0, 0);
     tetsById[id] = e;
+    std::cout << "Tet " << id << ": " << e << ": " <<
+      apf::getLinearCentroid(m, e) << std::endl;
 	}
 	m->end(it);
 
