@@ -1074,16 +1074,27 @@ namespace pc {
     // 0. Detect shock using normal mach number.
     detectShocksSerial(in, m);
 
+    apf::writeVtkFiles("shock_detect.vtk", m);
+
     // 1. Gaps and fragments.
     // 1.a. Breadth-first search radius 3 or 5 neighbors.
     defragmentShocksSerial(in, m);
+
+    std::cout << "Defragmented shocks." << std::endl;
+    apf::writeVtkFiles("shock_defrag.vtk", m);
 
     // 2. Component connection (breadth first search).
     // 2.a. OK to connect distinct shock systems.
     Shocks shocks = labelShocksSerial(in, m);
 
+    std::cout << "Labeled " << shocks.size() << " shocks." << std::endl;
+    apf::writeVtkFiles("shock_label.vtk", m);
+
     // 3. Filter components to remove noise (systems with <10 elements).
     denoiseShocksSerial(in, m, shocks, 10);
+
+    std::cout << "Denoised resulting in " << shocks.size() << " shocks."
+      << std::endl;
 
     // 4. Divide shock systems with planarity.
     if (in.shockIDSegment) {
