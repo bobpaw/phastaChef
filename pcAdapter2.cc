@@ -7,6 +7,7 @@
 #include <set>
 
 #include <apf.h>
+#include <apfDynamicMatrix.h>
 #include <apfMesh2.h>
 #include <apfShape.h>
 #include <chef.h>
@@ -1000,7 +1001,8 @@ namespace pc {
       for (size_t j = 0; j < n; ++j) X(i, j) /= mean(j);
     }
     // Get transpose.
-    apf::DynamicMatrix Xt = apf::transpose(X);
+    apf::DynamicMatrix Xt;
+    apf::transpose(X, Xt);
     // Get covar.
     apf::DynamicMatrix covar;
     apf::multiply(Xt, X, covar);
@@ -1024,23 +1026,26 @@ namespace pc {
       std::cout << "Shock " << s << "Principal Component: ";
       apf::Vector3 mean;
       // get points matrix.
-      std::DynamicMatrix points(shock.size(), 3);
+      apf::DynamicMatrix points(shock.size(), 3);
       for (size_t i = 0; i < shock.size(); ++i) {
-        apf::Vector3 pt = apf::geLinearCentroid(m, shock[i]);
+        apf::Vector3 pt = apf::getLinearCentroid(m, shock[i]);
         for (size_t j = 0; j < 3; ++j) {
           points(i, j) = pt[j];
           mean[i] += pt[j];
         }
       }
-      mean /= shock.size();
+      mean = mean / double(shock.size());
       // get covar matrix.
       apf::Matrix3x3 covar;
-      covarPoints(points, covar);
+      if (!covarPoints(points, covar)) {
+        std::cerr << "ERROR: covarPoints failed" << std::endl;
+        return;
+      }
       // get eigen decomp of covar.
       apf::Matrix3x3 V;
       apf::Vector3 L;
       int e = apf::eigen(covar, &V[0], &L[0]);
-      assert(e == 3);
+      PCU_DEBUG_ASSERT(e == 3);
       // print two points for each component in the shock.
       int chmax = 0;
       for (int i = 0; i < e; ++i) if (L[i] > L[chmax]) chmax = i;
