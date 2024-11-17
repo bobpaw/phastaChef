@@ -860,11 +860,11 @@ namespace pc {
             ShockPair sp(arg.c, arg.e);
             if (seen_pairs.find(sp) == seen_pairs.end()) {
               seen_pairs.insert(sp);
-              #ifndef NDEBUG
+              #ifdef DSS_DEBUG
               std::cout<<"Ray tracing "<<arg.c<<" to "<<arg.e<<std::endl;
               #endif
               rayTrace(arg.m, arg.c, arg.e, [Shock_Param](apf::Mesh* m, apf::MeshEntity* e) {
-                #ifndef NDEBUG
+                #ifdef DSS_DEBUG
                 std::cout<<"Tracing "<<e<<std::endl;
                 #endif
                 if (apf::getScalar(Shock_Param, e, 0) == ShockParam::NONE) {
@@ -976,6 +976,79 @@ namespace pc {
   void segmentShocksSerial(const ph::Input& in, apf::Mesh2* m, Shocks& shocks) {}
 
   /**
+   * @brief Get the covariance matrix for a set of points.
+   *
+   * @pre X.getColumns() == 3.
+   * @return Non-zero on success getting covariance and zero otherwise.
+   */
+  int covarPoints(apf::DynamicMatrix X, apf::Matrix3x3& C) {
+    // Confirm pre-conditions.
+    if (X.getRows() != 3 || X.getColumns() != 3) {
+      return 0;
+    }
+    // Matrix dimensions.
+    size_t m = X.getRows(), n = X.getColumns();
+    // Get mean(X).
+    apf::DynamicVector mean(n), row(n);
+    for (size_t i = 0; i < m; ++i) {
+      X.getRow(i, row);
+      mean += row;
+    }
+    mean /= m;
+    // Normalize X.
+    for (size_t i = 0; i < m; ++i) {
+      for (size_t j = 0; j < n; ++j) X(i, j) /= mean(j);
+    }
+    // Get transpose.
+    apf::DynamicMatrix Xt = apf::transpose(X);
+    // Get covar.
+    apf::DynamicMatrix covar;
+    apf::multiply(Xt, X, covar);
+    covar /= (n - 1);
+    // Confirm post-condition.
+    if (covar.getRows() != 3 || covar.getColumns() != 3) {
+      return 0;
+    }
+    for (size_t i = 0; i < 3; ++i)
+      for (size_t j = 0; j < 3; ++j) C[i][j] = covar(i, j);
+    return 1;
+  }
+
+  /**
+   * @brief Extend shocks.
+   */
+  void extendShocksSerial(const ph::Input& in, apf::Mesh2* m, Shocks& shocks) {
+    for (size_t s = 0; s < shocks.size(); ++s) {
+      const std::vector<apf::MeshEntity*>& shock = shocks[s];
+      // print shock number
+      std::cout << "Shock " << s << "Principal Component: ";
+      apf::Vector3 mean;
+      // get points matrix.
+      std::DynamicMatrix points(shock.size(), 3);
+      for (size_t i = 0; i < shock.size(); ++i) {
+        apf::Vector3 pt = apf::geLinearCentroid(m, shock[i]);
+        for (size_t j = 0; j < 3; ++j) {
+          points(i, j) = pt[j];
+          mean[i] += pt[j];
+        }
+      }
+      mean /= shock.size();
+      // get covar matrix.
+      apf::Matrix3x3 covar;
+      covarPoints(points, covar);
+      // get eigen decomp of covar.
+      apf::Matrix3x3 V;
+      apf::Vector3 L;
+      int e = apf::eigen(covar, &V[0], &L[0]);
+      assert(e == 3);
+      // print two points for each component in the shock.
+      int chmax = 0;
+      for (int i = 0; i < e; ++i) if (L[i] > L[chmax]) chmax = i;
+      std::cout << mean << " - " << mean + V[chmax] * L[chmax] << std::endl;
+    }
+  }
+
+  /**
    * @brief Setup Simmetrix/APF size field depending on input.
    * 
    * @param in PHASTA input config.
@@ -1018,6 +1091,7 @@ namespace pc {
     }
 
     // 5. Extension and intersection.
+    extendShocksSerial(in, m, shocks);
 
 
     // 6. Size-field.
