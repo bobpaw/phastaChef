@@ -671,7 +671,7 @@ namespace pc {
       }
 
       if (exit_vert) {
-        #ifndef NDEBUG
+        #ifdef RT_DEBUG
         std::cout << "Performing exit vert analysis for " << exit_vert << "."
                   <<std::endl;
         #endif
@@ -685,7 +685,7 @@ namespace pc {
           apf::Vector3 rgn_lc = apf::getLinearCentroid(m, rgns[i]),
             rgn_ray = (rgn_lc - exit_intersection).normalize();
           double dot = ray * rgn_ray;
-          #ifndef NDEBUG
+          #ifdef RT_DEBUG
           std::cout << "Candidate region " << rgns[i] << " with dot product "
                     << dot << "." << std::endl;
           #endif
@@ -698,7 +698,7 @@ namespace pc {
           std::cout << "ERROR: No suitable exit element found." << std::endl;
           return;
         } else if (visited.find(opposite_rgn) == visited.end()) {
-          #ifndef NDEBUG
+          #ifdef RT_DEBUG
           std::cout << "Choosing " << opposite_rgn << " as next element." << std::endl;
           #endif
           e = opposite_rgn;
@@ -709,7 +709,7 @@ namespace pc {
           return;
         }
       } else if (exit_edge) {
-        #ifndef NDEBUG
+        #ifdef RT_DEBUG
         std::cout << "Performing exit edge analysis for "<<exit_edge<<"." << std::endl;
         #endif
         apf::Downward points;
@@ -751,7 +751,7 @@ namespace pc {
           if (std::abs(face1_dist) < dist_tol
             || std::abs(face2_dist) < dist_tol) {
             // Ray travels through face. Could pick this region or the other.
-            #ifndef NDEBUG
+            #ifdef RT_DEBUG
             std::cout << "Ray distance indicates travel through face."
                       << std::endl;
             #endif
@@ -760,7 +760,7 @@ namespace pc {
               opposite_rgn = rgns[i];
               break;
             }
-            #ifndef NDEBUG
+            #ifdef RT_DEBUG
             else {
               std::cout << "Negative dot product indicates backward travel"
                            "; continuing search." << std::endl;
@@ -773,7 +773,7 @@ namespace pc {
             opposite_rgn = rgns[i];
             break;
           }
-          #ifndef NDEBUG
+          #ifdef RT_DEBUG
           else {
             std::cout << "Candidate " << rgns[i] << " has same-sign distances"
                          "; continuing search." << std::endl;
@@ -784,7 +784,7 @@ namespace pc {
           std::cout << "ERROR: No suitable element found." << std::endl;
           return;
         } else if (visited.find(opposite_rgn) == visited.end()) {
-          #ifndef NDEBUG
+          #ifdef RT_DEBUG
           std::cout << "Choosing " << opposite_rgn << " as next element." << std::endl;
           #endif
           e = opposite_rgn;
