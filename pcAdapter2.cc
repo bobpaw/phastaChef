@@ -977,28 +977,37 @@ namespace pc {
   void segmentShocksSerial(const ph::Input& in, apf::Mesh2* m, Shocks& shocks) {}
 
   /**
+   * @brief Calculate the mean of a data matrix of points.
+   *
+   * @param X a n-by-3 runtime matrix with a list of points.
+   * @return A vector with the mean of each column.
+   */
+  apf::Vector3 pointsMean(const apf::DynamicMatrix& X) {
+    apf::Vector3 mean;
+    for (size_t i = 0; i < X.getRows(); ++i) {
+      for (size_t j = 0; j < 3; ++j) mean[j] += X(i, j);
+    }
+    return mean / double(X.getRows());
+  }
+
+  /**
    * @brief Get the covariance matrix for a set of points.
    *
    * @pre X.getColumns() == 3.
-   * @return Non-zero on success getting covariance and zero otherwise.
+   * @return true on success getting covariance and false otherwise.
    */
-  int covarPoints(apf::DynamicMatrix X, apf::Matrix3x3& C) {
+  bool covarPoints(apf::DynamicMatrix X, apf::Matrix3x3& C) {
     // Confirm pre-conditions.
-    if (X.getRows() != 3 || X.getColumns() != 3) {
-      return 0;
+    if (X.getColumns() != 3) {
+      return false;
     }
     // Matrix dimensions.
     size_t m = X.getRows(), n = X.getColumns();
     // Get mean(X).
-    apf::DynamicVector mean(n), row(n);
+    apf::Vector3 mean = pointsMean(X);
+    // Mean-shift X.
     for (size_t i = 0; i < m; ++i) {
-      X.getRow(i, row);
-      mean += row;
-    }
-    mean /= m;
-    // Normalize X.
-    for (size_t i = 0; i < m; ++i) {
-      for (size_t j = 0; j < n; ++j) X(i, j) /= mean(j);
+      for (size_t j = 0; j < n; ++j) X(i, j) -= mean[j];
     }
     // Get transpose.
     apf::DynamicMatrix Xt;
@@ -1006,14 +1015,27 @@ namespace pc {
     // Get covar.
     apf::DynamicMatrix covar;
     apf::multiply(Xt, X, covar);
-    covar /= (n - 1);
+    covar /= m; // not a sample so we do not need Bessel's correction.
     // Confirm post-condition.
     if (covar.getRows() != 3 || covar.getColumns() != 3) {
-      return 0;
+      return false;
     }
     for (size_t i = 0; i < 3; ++i)
       for (size_t j = 0; j < 3; ++j) C[i][j] = covar(i, j);
-    return 1;
+    return true;
+  }
+
+  bool pointsPCA(const apf::DynamicMatrix& X, apf::Matrix3x3& V,
+    apf::Vector3& L) {
+    apf::Matrix3x3 covar;
+    if (!covarPoints(X, covar)) return false;
+    // try to run eigen before sending updating references.
+    apf::Vector3 Le;
+    apf::Matrix3x3 Ve;
+    if (apf::eigen(covar, &Ve[0], &Le[0]) != 0) return false;
+    L = Le;
+    V = Ve;
+    return true;
   }
 
   /**
@@ -1021,35 +1043,27 @@ namespace pc {
    */
   void extendShocksSerial(const ph::Input& in, apf::Mesh2* m, Shocks& shocks) {
     for (size_t s = 0; s < shocks.size(); ++s) {
-      const std::vector<apf::MeshEntity*>& shock = shocks[s];
       // print shock number
-      std::cout << "Shock " << s << "Principal Component: ";
-      apf::Vector3 mean;
+      std::cout << "Shock " << s << "(" << shocks[s].size() << " elms)"" Principal Components:" << std::endl;
       // get points matrix.
-      apf::DynamicMatrix points(shock.size(), 3);
-      for (size_t i = 0; i < shock.size(); ++i) {
-        apf::Vector3 pt = apf::getLinearCentroid(m, shock[i]);
-        for (size_t j = 0; j < 3; ++j) {
-          points(i, j) = pt[j];
-          mean[i] += pt[j];
-        }
+      apf::DynamicMatrix points(shocks[s].size(), 3);
+      for (size_t i = 0; i < shocks[s].size(); ++i) {
+        apf::Vector3 pt = apf::getLinearCentroid(m, shocks[s][i]);
+        for (size_t j = 0; j < 3; ++j) points(i, j) = pt[j];
       }
-      mean = mean / double(shock.size());
-      // get covar matrix.
-      apf::Matrix3x3 covar;
-      if (!covarPoints(points, covar)) {
-        std::cerr << "ERROR: covarPoints failed" << std::endl;
-        return;
-      }
-      // get eigen decomp of covar.
+      apf::Vector3 mean = pointsMean(points);
       apf::Matrix3x3 V;
       apf::Vector3 L;
-      int e = apf::eigen(covar, &V[0], &L[0]);
-      PCU_DEBUG_ASSERT(e == 3);
+      double t0 = PCU_Time();
+      if (!pointsPCA(points, V, L)) {
+        std::cerr << "extendShocksSerial: pointsPCA failed" << std::endl;
+        return;
+      }
+      double t1 = PCU_Time();
+      std::cout << "Calculation time: " << t1 - t0 << std::endl;
       // print two points for each component in the shock.
-      int chmax = 0;
-      for (int i = 0; i < e; ++i) if (L[i] > L[chmax]) chmax = i;
-      std::cout << mean << " - " << mean + V[chmax] * L[chmax] << std::endl;
+      for (int i = 0; i < 3; ++i)
+        std::cout << mean << " - " << mean + V[i] * L[i] << std::endl;
     }
   }
 
