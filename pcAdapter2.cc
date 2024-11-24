@@ -539,30 +539,29 @@ namespace pc {
     return nullptr;
   }
 
+  // A hybrid action/predicate. May act on e. Return false to halt ray.
+  using RTaction = std::function<bool(apf::Mesh* m, apf::MeshEntity* e)>;
+
   /**
    * @brief Perform an `action` on elements intersected by a ray from `start` to
-   * `end`.
+   * `dst`.
    *
    * Action always occurs for `start`, then ray tracing starts. Action is only
-   * run for `end` if there is path along the ray (i.e. not when there's empty
-   * space).
+   * run for `end` if it is non-NULL and a path to it through the ray exists
+   * (i.e. not when there's empty space).
    *
    * @param start,end Mesh elements (dim=3).
    * @param action An action to perform on mesh elements.
    */
   void rayTrace(apf::Mesh* m, apf::MeshEntity* start, apf::MeshEntity* end,
-                std::function<void(apf::Mesh* m, apf::MeshEntity* e)> action) {
+    const apf::Vector3& dst, RTaction action) {
     apf::Vector3 src = apf::getLinearCentroid(m, start),
-                 dst = apf::getLinearCentroid(m, end),
                  ray = (dst - src).normalize();
 
     // Cached entry information.
     apf::MeshEntity* entry_ent = nullptr;
-
     std::set<apf::MeshEntity*> visited;
-
-    for (apf::MeshEntity* e = start; e != end;) {
-      action(m, e);
+    for (apf::MeshEntity* e = start; e != end && action(m, e);) {
       visited.insert(e);
 
       const apf::Vector3 e_lc = apf::getLinearCentroid(m, e);
@@ -814,7 +813,12 @@ namespace pc {
         return;
       }
     }
-    action(m, end);
+    if (end) action(m, end);
+  }
+
+  void rayTrace(apf::Mesh* m, apf::MeshEntity* start, apf::MeshEntity* end,
+    RTaction action) {
+    rayTrace(m, start, end, apf::getLinearCentroid(m, end), action);
   }
 
   /**
@@ -871,6 +875,7 @@ namespace pc {
                 if (apf::getScalar(Shock_Param, e, 0) == ShockParam::NONE) {
                   apf::setScalar(Shock_Param, e, 0, ShockParam::FRAGMENT);
                 }
+                return true;
               });
             }
           }
