@@ -1043,9 +1043,28 @@ namespace pc {
     // try to run eigen before sending updating references.
     apf::Vector3 Le;
     apf::Matrix3x3 Ve;
-    if (apf::eigen(covar, &Ve[0], &Le[0]) != 0) return false;
-    L = Le;
-    V = Ve;
+    int e = apf::eigen(covar, &Ve[0], &Le[0]);
+    if (e != 3) return false;
+    int hmap[3] = {0, 1, 2};
+    if (Le[hmap[0]] < Le[hmap[1]]) {
+      int tmp = hmap[0];
+      hmap[0] = hmap[1];
+      hmap[1] = tmp;
+    }
+    if (Le[hmap[0]] < Le[hmap[2]]) {
+      int tmp = hmap[0];
+      hmap[0] = hmap[2];
+      hmap[2] = tmp;
+    }
+    if (Le[hmap[1]] < Le[hmap[2]]) {
+      int tmp = hmap[1];
+      hmap[1] = hmap[2];
+      hmap[2] = tmp;
+    }
+    for (int i = 0; i < 3; ++i) {
+      L[i] = sqrt(Le[hmap[i]]);
+      V[i] = Ve[hmap[i]];
+    }
     return true;
   }
 
