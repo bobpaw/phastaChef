@@ -992,11 +992,13 @@ namespace pc {
    * @return A vector with the mean of each column.
    */
   apf::Vector3 pointsMean(const apf::DynamicMatrix& X) {
-    apf::Vector3 mean;
-    for (size_t i = 0; i < X.getRows(); ++i) {
+    size_t m = X.getRows();
+    PCU_DEBUG_ASSERT(X.getColumns() == 3);
+    apf::Vector3 mean(0, 0, 0);
+    for (size_t i = 0; i < m; ++i) {
       for (size_t j = 0; j < 3; ++j) mean[j] += X(i, j);
     }
-    return mean / double(X.getRows());
+    return mean / double(m);
   }
 
   /**
