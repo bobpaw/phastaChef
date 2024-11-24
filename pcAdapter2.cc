@@ -1090,6 +1090,7 @@ namespace pc {
       apf::Matrix3x3 V;
       apf::Vector3 L;
       double t0 = PCU_Time();
+
       if (!pointsPCA(points, V, L)) {
         std::cerr << "extendShocksSerial: pointsPCA failed" << std::endl;
         return;
@@ -1099,6 +1100,87 @@ namespace pc {
       // print two points for each component in the shock.
       for (int i = 0; i < 3; ++i)
         std::cout << mean << " - " << mean + V[i] * L[i] << std::endl;
+      // Mean shift points.
+      for (size_t i = 0; i < points.getRows(); ++i) {
+        for (size_t j = 0; j < 3; ++j) points(i, j) -= mean[j];
+      }
+      apf::Field* pc_ess_tip = m->findField("pc_ess_tip");
+      if (!pc_ess_tip) {
+        pc_ess_tip = apf::createField(m, "pc_ess_tip", apf::SCALAR,
+          apf::getConstant(3));
+        apf::zeroField(pc_ess_tip);
+      }
+      apf::DynamicMatrix result(shocks[s].size(), 3);
+      apf::multiply(points, apf::fromMatrix(V), result);
+      double maxX = -HUGE_VAL, minX = HUGE_VAL;
+      for (size_t i = 0; i < result.getRows(); ++i) {
+        double xR = result(i, 0);
+        if (xR < minX) minX = xR;
+        if (xR > maxX) maxX = xR;
+      }
+      std::vector<apf::MeshEntity*> tipPlus, tipMinus;
+      for (size_t i = 0; i < shocks[s].size(); ++i) {
+        // FIXME
+        if (result(i, 0) > maxX * 0.8) {
+          tipPlus.push_back(shocks[s][i]);
+          apf::setScalar(pc_ess_tip, shocks[s][i], 0, 1);
+        } else if (result(i, 0) < minX * 0.8) {
+          tipMinus.push_back(shocks[s][i]);
+          apf::setScalar(pc_ess_tip, shocks[s][i], 0, 1);
+        }
+      }
+      apf::Field *Shock_Param = m->findField("Shock_Param"),
+        *Shock_ID = m->findField("Shock_ID");
+      apf::Field* pc_ess_d2s = m->findField("pc_ess_d2s");
+      if (!pc_ess_d2s) {
+        pc_ess_d2s = apf::createField(m, "pc_ess_d2s", apf::SCALAR,
+          apf::getConstant(3));
+      }
+      // now for each tip, ray trace and update shock id.
+      class RTvisitor {
+      public:
+        RTvisitor(const apf::Vector3& lc, double L, double id,
+          apf::Field* SP, apf::Field* SID, apf::Field* d2s):
+          src_lc(lc), ray_len(L), ray_id(id),
+          Shock_Param(SP), Shock_ID(SID), pc_ess_d2s(d2s) {}
+        bool operator()(apf::Mesh* m, apf::MeshEntity* e) {
+          // Get distance from src.
+          apf::Vector3 e_lc = apf::getLinearCentroid(m, e);
+          apf::Vector3 disp = e_lc - src_lc;
+          double dist2 = disp * disp;
+          // mark as shock
+          double sp = apf::getScalar(Shock_Param, e, 0);
+          if (sp == ShockParam::NONE) {
+            apf::setScalar(Shock_Param, e, 0, ShockParam::EXTEND);
+            apf::setScalar(Shock_ID, e, 0, ray_id);
+            apf::setScalar(pc_ess_d2s, e, 0, dist2);
+          } else if (sp == ShockParam::EXTEND) {
+            double d2s = apf::getScalar(pc_ess_d2s, e, 0);
+            if (dist2 < d2s) {
+              apf::setScalar(Shock_ID, e, 0, ray_id);
+              apf::setScalar(pc_ess_d2s, e, 0, dist2);
+            }
+          }
+          return abs(dist2) < ray_len * ray_len;
+        }
+        void setSrcLC(const apf::Vector3& lc) {
+          src_lc = lc;
+        }
+      private:
+        apf::Vector3 src_lc;
+        double ray_len, ray_id;
+        apf::Field *Shock_Param, *Shock_ID, *pc_ess_d2s;
+      } visit({}, L[0], s + 1, Shock_Param, Shock_ID, pc_ess_d2s);
+      for (apf::MeshEntity* ent : tipPlus) {
+        apf::Vector3 lc = apf::getLinearCentroid(m, ent);
+        visit.setSrcLC(lc);
+        rayTrace(m, ent, nullptr, lc + V[0] * L[0], visit);
+      }
+      for (apf::MeshEntity* ent : tipMinus) {
+        apf::Vector3 lc = apf::getLinearCentroid(m, ent);
+        visit.setSrcLC(lc);
+        rayTrace(m, ent, nullptr, lc - V[0] * L[0], visit);
+      }
     }
   }
 
@@ -1157,7 +1239,7 @@ namespace pc {
 
     // 5. Extension and intersection.
     extendShocksSerial(in, m, shocks);
-
+    apf::writeVtkFiles("shock_extend.vtk", m);
 
     // 6. Size-field.
     setupSizeField(in, m, szFld);

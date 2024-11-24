@@ -10,6 +10,7 @@ namespace pc {
     static constexpr double NONE = 0; ///< No detected shock.
     static constexpr double SHOCK = 1; ///< Detected shock.
     static constexpr double FRAGMENT = 2; ///< Defragmented element.
+    static constexpr double EXTEND = 3; ///< Shock extension.
 
   private:
     // Static only class has private constructor.
