@@ -891,59 +891,68 @@ namespace pc {
    * @param m APF mesh.
    * @input-field "Shock_Param" Shock indicator field. 1 or 0.
    * @working-field "pc_cs_bfs"
-   * @output-field "Shock_Param"
+   * @output-field "Shock_ID"
    * @return An array of labeled shocks.
    */
-	Shocks labelShocksSerial(const ph::Input& in, apf::Mesh2* m) {
-		// Get input field.
-		apf::Field* Shock_Param = m->findField("Shock_Param");
+  Shocks labelShocksSerial(const ph::Input& in, apf::Mesh2* m) {
+    // Get input field.
+    apf::Field* Shock_Param = m->findField("Shock_Param");
 
-		// Idea: each value is a (PCU_Rank, Component ID, distance) triplet.
-		apf::Field* pc_cs_bfs =
-				apf::createField(m, "pc_cs_bfs", apf::VECTOR, apf::getConstant(3));
+    // Idea: each value is a (PCU_Rank, Component ID, distance) triplet.
+    apf::Field* pc_cs_bfs =
+      apf::createField(m, "pc_cs_bfs", apf::VECTOR, apf::getConstant(3));
 
-		// Initialize BFS field.
-		apf::MeshIterator* it = m->begin(3);
-		for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
-			apf::Vector3 bfs_trip(-1, -1, -1);
-			apf::setVector(pc_cs_bfs, e, 0, bfs_trip);
-		}
-		m->end(it);
+    // Initialize BFS field.
+    apf::MeshIterator* it = m->begin(3);
+    for (apf::MeshEntity* e; e = m->iterate(it);) {
+      apf::Vector3 bfs_trip(-1, -1, -1);
+      apf::setVector(pc_cs_bfs, e, 0, bfs_trip);
+    }
+    m->end(it);
 
-		Shocks shocks;
-		int current_component = -1;
+    Shocks shocks;
+    int current_component = -1;
 
-		serialBFS(
-				m, 3, 0,
-				[Shock_Param, pc_cs_bfs](const BFSarg& arg) -> BFSresult {
-					apf::Vector3 v;
-					apf::getVector(pc_cs_bfs, arg.e, 0, v);
-					return apf::getScalar(Shock_Param, arg.e, 0) != ShockParam::NONE &&
-								 v.y() < 0 ? BFSresult::ACT : BFSresult::CONTINUE;
-				},
-				[pc_cs_bfs, &shocks, &current_component](const BFSarg& arg) {
-					// Check if this is a new shock component.
-					if (arg.component != current_component) {
-						shocks.emplace_back();
-						current_component = arg.component;
-					}
+    serialBFS(m, 3, 0,
+      [Shock_Param, pc_cs_bfs](const BFSarg& arg) -> BFSresult {
+        apf::Vector3 v;
+        apf::getVector(pc_cs_bfs, arg.e, 0, v);
+        double sp = apf::getScalar(Shock_Param, arg.e, 0);
+        return sp != ShockParam::NONE && v.y() < 0 ?
+          BFSresult::ACT : BFSresult::CONTINUE;
+      },
+      [pc_cs_bfs, &shocks, &current_component](const BFSarg& arg) {
+        // Add empty vector if this is a new shock component.
+        if (arg.component != current_component) {
+          shocks.emplace_back();
+          current_component = arg.component;
+        }
+        apf::Vector3 v(PCU_Comm_Self(), shocks.size(), arg.distance);
+        apf::setVector(pc_cs_bfs, arg.e, 0, v);
+        shocks.back().push_back(arg.e);
+      }
+    );
 
-					apf::Vector3 v;
-					apf::getVector(pc_cs_bfs, arg.e, 0, v);
-					v.x() = PCU_Comm_Self();
-					v.y() = shocks.size();
-					v.z() = arg.distance;
-					apf::setVector(pc_cs_bfs, arg.e, 0, v);
+    // FIXME: Process part boundary (repeated triplet max.)
 
-					shocks.back().push_back(arg.e);
-				});
+    // Write output field
+    apf::Field* Shock_ID =
+      apf::createField(m, "Shock_ID", apf::SCALAR, apf::getConstant(3));
+    it = m->begin(3);
+    for (apf::MeshEntity* e = m->iterate(it); e; e = m->iterate(it)) {
+      apf::Vector3 bfs_trip;
+      apf::getVector(pc_cs_bfs, e, 0, bfs_trip);
+      apf::setScalar(Shock_ID, e, 0, bfs_trip.y());
+    }
+    m->end(it);
 
-		// FIXME: Process part boundary (repeated triplet max.)
+    // Destroy working field.
+    apf::destroyField(pc_cs_bfs);
 
-		return shocks;
-	}
+    return shocks;
+  }
 
-	/**
+  /**
    * @brief Remove components with < minsize elements.
    * 
    * @param in PHASTA input config.
@@ -953,13 +962,13 @@ namespace pc {
    */
   void denoiseShocksSerial(const ph::Input& in, apf::Mesh2* m, Shocks& shocks, int minsize = 10) {
     apf::Field* Shock_Param = m->findField("Shock_Param");
-    apf::Field* pc_cs_bfs = m->findField("pc_cs_bfs");
+    apf::Field* Shock_ID = m->findField("Shock_ID");
 
     for (auto it = shocks.begin(); it != shocks.end();) {
       if (it->size() < minsize) {
         for (auto it2 = it->begin(); it2 != it->end(); ++it2) {
           apf::setScalar(Shock_Param, *it2, 0, ShockParam::NONE);
-          apf::setVector(pc_cs_bfs, *it2, 0, apf::Vector3(-1, -1, -1));
+          apf::setScalar(Shock_ID, *it2, 0, -1);
         }
         it = shocks.erase(it);
       } else {
