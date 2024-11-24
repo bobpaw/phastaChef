@@ -25,3 +25,8 @@ add_executable(test_prisms EXCLUDE_FROM_ALL test_prisms.cc
 
 target_include_directories(test_prisms PRIVATE "${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_prisms PRIVATE SCOREC::core)
+
+add_executable(load_cev load_cev.cc
+  "${CMAKE_SOURCE_DIR}/pcAdapter2.cc"
+)
+target_link_libraries(load_cev PRIVATE SCOREC::core)
