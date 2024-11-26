@@ -31,3 +31,9 @@ add_executable(load_cev load_cev.cc
   "${CMAKE_SOURCE_DIR}/pcAdapter2.cc"
 )
 target_link_libraries(load_cev PRIVATE SCOREC::core)
+
+add_executable(process_cev process_cev.cc
+  csv.cc
+  "${CMAKE_SOURCE_DIR}/pcAdapter2.cc"
+)
+target_link_libraries(process_cev PRIVATE SCOREC::core)
