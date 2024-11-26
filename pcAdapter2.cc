@@ -1184,6 +1184,23 @@ namespace pc {
     }
   }
 
+  void processShocksSerial(ph::Input& in, apf::Mesh2* m) {
+    defragmentShocksSerial(in, m);
+    std::cout << "Defragmented shocks." << std::endl;
+    apf::writeVtkFiles("shock_defrag.vtk", m);
+    Shocks shocks = labelShocksSerial(in, m);
+    std::cout << "Labeled " << shocks.size() << " shocks." << std::endl;
+    apf::writeVtkFiles("shock_label.vtk", m);
+    denoiseShocksSerial(in, m, shocks, 10);
+    std::cout << "Denoised resulting in " << shocks.size() << " shocks."
+      << std::endl;
+    if (in.shockIDSegment) {
+      segmentShocksSerial(in, m, shocks);
+    }
+    extendShocksSerial(in, m, shocks);
+    apf::writeVtkFiles("shock_extend.vtk", m);
+  }
+
   /**
    * @brief Setup Simmetrix/APF size field depending on input.
    * 
@@ -1206,42 +1223,9 @@ namespace pc {
   void runMeshAdapterSerial(ph::Input& in, apf::Mesh2* m, apf::Field* szFld, int step) {
     PCU_ALWAYS_ASSERT(PCU_Comm_Peers() == 1);
     m->verify();
-
-    // 0. Detect shock using normal mach number.
     detectShocksSerial(in, m);
-
     apf::writeVtkFiles("shock_detect.vtk", m);
-
-    // 1. Gaps and fragments.
-    // 1.a. Breadth-first search radius 3 or 5 neighbors.
-    defragmentShocksSerial(in, m);
-
-    std::cout << "Defragmented shocks." << std::endl;
-    apf::writeVtkFiles("shock_defrag.vtk", m);
-
-    // 2. Component connection (breadth first search).
-    // 2.a. OK to connect distinct shock systems.
-    Shocks shocks = labelShocksSerial(in, m);
-
-    std::cout << "Labeled " << shocks.size() << " shocks." << std::endl;
-    apf::writeVtkFiles("shock_label.vtk", m);
-
-    // 3. Filter components to remove noise (systems with <10 elements).
-    denoiseShocksSerial(in, m, shocks, 10);
-
-    std::cout << "Denoised resulting in " << shocks.size() << " shocks."
-      << std::endl;
-
-    // 4. Divide shock systems with planarity.
-    if (in.shockIDSegment) {
-      segmentShocksSerial(in, m, shocks);
-    }
-
-    // 5. Extension and intersection.
-    extendShocksSerial(in, m, shocks);
-    apf::writeVtkFiles("shock_extend.vtk", m);
-
-    // 6. Size-field.
+    processShocksSerial(in, m);
     setupSizeField(in, m, szFld);
     if (in.simmetrixMesh == 1) {
       // setupSimAdapter(...);
@@ -1250,7 +1234,6 @@ namespace pc {
       chef::adapt(m, szFld, in);
       chef::balance(in, m);
     }
-
     m->verify();
   }
 } // namespace pc
