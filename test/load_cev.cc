@@ -20,10 +20,6 @@
 #include "../pcShockParam.h"
 #include "csv.h"
 
-namespace pc {
-  void processShocksSerial(ph::Input& in, apf::Mesh2* m);
-}
-
 int main(int argc, char* argv[]) {
   // Initialize parallelism.
   MPI_Init(&argc, &argv);
