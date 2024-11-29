@@ -653,7 +653,8 @@ namespace pc {
         m->getAdjacent(e, 1, edges);
         apf::MeshEntity *points[2];
         for (size_t i = 0; i < edges.size(); ++i) {
-          if (prev == edges[i]) continue;
+          if (prev == edges[i] || prev == points[0] || prev == points[1])
+            continue;
           m->getDownward(edges[i], 0, points);
           apf::Vector3 p0 = apf::getLinearCentroid(m, points[0]),
             p1 = apf::getLinearCentroid(m, points[1]);
@@ -743,8 +744,9 @@ namespace pc {
           if (eFaces[face[0]] * eFaces[face[1]] == -1) {
             next = rgns[i];
             #ifdef RT_DEBUG
+            apf::Vector3 n_lc = apf::getLinearCentroid(m, next);
             std::cout << "tracing from " << apf::Mesh::typeName[eType]
-              << " to region " << next << std::endl;
+              << " to region " << next << n_lc << std::endl;
             #endif
             break;
           }
@@ -803,8 +805,10 @@ namespace pc {
           if (next) {
             #ifdef RT_DEBUG
             apf::Mesh::Type nType = m->getType(next);
+            apf::Vector3 n_lc = apf::getLinearCentroid(m, next);
             std::cout << "tracing from " << apf::Mesh::typeName[eType] <<
-              " to " << apf::Mesh::typeName[nType] << ' ' << next << std::endl;
+              " to " << apf::Mesh::typeName[nType] << ' ' << next << n_lc <<
+              std::endl;
             #endif
             break;
           }
