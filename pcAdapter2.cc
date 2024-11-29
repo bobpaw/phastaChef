@@ -653,9 +653,9 @@ namespace pc {
         m->getAdjacent(e, 1, edges);
         apf::MeshEntity *points[2];
         for (size_t i = 0; i < edges.size(); ++i) {
+          m->getDownward(edges[i], 0, points);
           if (prev == edges[i] || prev == points[0] || prev == points[1])
             continue;
-          m->getDownward(edges[i], 0, points);
           apf::Vector3 p0 = apf::getLinearCentroid(m, points[0]),
             p1 = apf::getLinearCentroid(m, points[1]);
           if (eType == apf::Mesh::VERTEX) {
@@ -763,7 +763,7 @@ namespace pc {
         // Collect adjacent regions.
         apf::Adjacent rgns;
         m->getAdjacent(e, 3, rgns);
-        for (size_t i = 0; i < rgns.size(); ++i) {
+        for (size_t i = 0; !next && i < rgns.size(); ++i) {
           if (prev == rgns[i]) continue;
           std::vector<apf::MeshEntity*> tri;
           apf::Downward edge;
@@ -774,10 +774,11 @@ namespace pc {
           if (tri.size() > 3) continue; // FIXME: handle pyramids :(
           tri.push_back(tri.front());
           int indAll = 0;
-          next = rgns[i]; // Assume correct region.
-          for (size_t j = 0; j < 3; ++j) {
+          bool nextRgn = true;
+          for (size_t j = 0; nextRgn && j < 3; ++j) {
             int ind = edgeIndicator(m, e_lc, ray, tri[j], tri[j + 1]);
             if (ind == 0) {
+              nextRgn = false;
               // potential exit face.
               // Ray is on face plane, but not necessarily bounded by edges.
               // Let c1 = ray x e1, c2 = ray x e2.
@@ -791,18 +792,14 @@ namespace pc {
                 apf::MeshEntity* face = getFaceFromEdges(m,
                   inv_opp_verts[tri[j]], inv_opp_verts[tri[j+1]]);
                 if (prev != face) next = face;
-              } else {
-                next = nullptr;
               }
-              break;
-            }
-            if (indAll == 0) indAll = ind;
-            else if (indAll != ind) {
-              next = nullptr;
-              break;
+            } else {
+              if (indAll == 0) indAll = ind;
+              else if (indAll != ind) nextRgn = false;
             }
           }
-          if (next) {
+          if (nextRgn) {
+            next = rgns[i];
             #ifdef RT_DEBUG
             apf::Mesh::Type nType = m->getType(next);
             apf::Vector3 n_lc = apf::getLinearCentroid(m, next);
@@ -810,7 +807,6 @@ namespace pc {
               " to " << apf::Mesh::typeName[nType] << ' ' << next << n_lc <<
               std::endl;
             #endif
-            break;
           }
         }
       }
