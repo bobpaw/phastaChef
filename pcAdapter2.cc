@@ -589,9 +589,19 @@ namespace pc {
   void rayTrace2(apf::Mesh* m, apf::MeshEntity* start, apf::MeshEntity* end,
     const apf::Vector3& dst, RTaction action) {
     apf::Vector3 src = apf::getLinearCentroid(m, start);
+    #ifdef RT_DEBUG
+    std::cout << "rayTrace from " << start << src << " to " << end << dst
+      << std::endl;
+    #endif
     apf::Vector3 ray = (dst - src).normalize();
+    std::set<apf::MeshEntity*> visited; // FIXME: should not be necessary.
     apf::MeshEntity *prev = start, *e = start, *next = nullptr;
     for (; e && e != end; prev = e, e = next, next = nullptr) {
+      if (visited.count(e)) {
+        std::cerr << "rayTrace2: loop detected" << std::endl;
+        return;
+      }
+      visited.insert(e);
       apf::Mesh::Type eType = m->getType(e), pType = m->getType(prev);
       if (GETDIM(eType) == 3)
         if (!action(m, e)) return;
@@ -610,8 +620,9 @@ namespace pc {
         apf::MeshEntity *up0 = m->getUpward(e, 0);
         next = prev == up0 ? m->getUpward(e, 1) : up0;
         #ifdef RT_DEBUG
+        apf::Vector3 n_lc = apf::getLinearCentroid(m, next);
         std::cout << "tracing from " << apf::Mesh::typeName[eType]
-          << " to region " << next << std::endl;
+          << " to region " << next << n_lc << std::endl;
         #endif
         continue;
       }
@@ -642,18 +653,30 @@ namespace pc {
         m->getAdjacent(e, 1, edges);
         apf::MeshEntity *points[2];
         for (size_t i = 0; i < edges.size(); ++i) {
+          if (prev == edges[i]) continue;
           m->getDownward(edges[i], 0, points);
           apf::Vector3 p0 = apf::getLinearCentroid(m, points[0]),
             p1 = apf::getLinearCentroid(m, points[1]);
-          apf::Vector3 plane = apf::cross(p0 - src, p1 - src);
-          // FIXME: normalize.
-          if (abs(ray * plane) < tol && rayIntersectsSegment(ray, src, p0, p1)) {
-            next = edges[i];
-            #ifdef RT_DEBUG
-            std::cout << "tracing from " << apf::Mesh::typeName[eType]
-              << " to edge " << next << std::endl;
-            #endif
-            break;
+          if (eType == apf::Mesh::VERTEX) {
+            apf::Vector3 c = apf::cross(ray, p1 - p0);
+            if (c * c < tol * tol) {
+              next = edges[i];
+              #ifdef RT_DEBUG
+              std::cout << "tracing from " << apf::Mesh::typeName[eType]
+                << " to edge " << next << std::endl;
+              #endif
+            }
+          } else {
+            apf::Vector3 plane = apf::cross(p0 - src, p1 - src).normalize();
+            if (abs(ray * plane) < tol &&
+              rayIntersectsSegment(ray, src, p0, p1)) {
+              next = edges[i];
+              #ifdef RT_DEBUG
+              std::cout << "tracing from " << apf::Mesh::typeName[eType]
+                << " to edge " << next << std::endl;
+              #endif
+              break;
+            }
           }
         }
         if (next) continue;
@@ -667,12 +690,13 @@ namespace pc {
           apf::Downward vert;
           int verts = getFaceVertsCCW(m, e, i, vert);
           vert[verts] = vert[0]; // Make circular list.
-          next = face[i]; // Assume face[i] is the exit face.
-          for (int j = 0; next && j < verts; ++j) {
+          bool good = true;
+          for (int j = 0; good && j < verts; ++j) {
             int ind = edgeIndicator(m, src, ray, vert[j], vert[j + 1]);
-            if (ind != 1) next = nullptr;
+            if (ind != 1) good = false;
           }
-          if (next) {
+          if (good) {
+            next = face[i];
             #ifdef RT_DEBUG
             std::cout << "tracing from " << apf::Mesh::typeName[eType]
               << " to face " << next << std::endl;
@@ -688,7 +712,7 @@ namespace pc {
           apf::MeshEntity* face = m->getUpward(e, i);
           apf::Vector3 face_lc = apf::getLinearCentroid(m, face);
           int ind = edgeIndicator(m, face_lc, ray, p[0], p[1]);
-          if (ind == 0) {
+          if (ind == 0 && prev != face) {
             next = face;
             #ifdef RT_DEBUG
             std::cout << "tracing from " << apf::Mesh::typeName[eType]
@@ -714,7 +738,9 @@ namespace pc {
             }
           }
           // Select region with the ray (indicator changes between faces).
-          if (eFaces[face[0]] != eFaces[face[1]]) {
+          // Checking ind1 * ind2 == -1 instead of ind1 != ind2 accounts for
+          // possible 0 indicator (prev face).
+          if (eFaces[face[0]] * eFaces[face[1]] == -1) {
             next = rgns[i];
             #ifdef RT_DEBUG
             std::cout << "tracing from " << apf::Mesh::typeName[eType]
@@ -750,13 +776,22 @@ namespace pc {
           for (size_t j = 0; j < 3; ++j) {
             int ind = edgeIndicator(m, e_lc, ray, tri[j], tri[j + 1]);
             if (ind == 0) {
-              // exit face.
-              next = getFaceFromEdges(m, inv_opp_verts[tri[j]],
-                inv_opp_verts[tri[j+1]]);
-              #ifdef RT_DEBUG
-              std::cout << "tracing from " << apf::Mesh::typeName[eType]
-                << " to face " << next << std::endl;
-              #endif
+              // potential exit face.
+              // Ray is on face plane, but not necessarily bounded by edges.
+              // Let c1 = ray x e1, c2 = ray x e2.
+              // If ray is bounded by edges, c1 * c2 < 0.
+              // Otherwise, ray cannot be in this region.
+              apf::Vector3 p1 = apf::getLinearCentroid(m, tri[j]),
+                p2 = apf::getLinearCentroid(m, tri[j + 1]);
+              apf::Vector3 e1 = p1 - e_lc, e2 = p2 - e_lc;
+              apf::Vector3 c1 = apf::cross(ray, e1), c2 = apf::cross(ray, e2);
+              if (c1 * c2 < 0) {
+                apf::MeshEntity* face = getFaceFromEdges(m,
+                  inv_opp_verts[tri[j]], inv_opp_verts[tri[j+1]]);
+                if (prev != face) next = face;
+              } else {
+                next = nullptr;
+              }
               break;
             }
             if (indAll == 0) indAll = ind;
@@ -767,13 +802,19 @@ namespace pc {
           }
           if (next) {
             #ifdef RT_DEBUG
-            std::cout << "tracing from " << apf::Mesh::typeName[eType]
-              << " to " << next << std::endl;
+            apf::Mesh::Type nType = m->getType(next);
+            std::cout << "tracing from " << apf::Mesh::typeName[eType] <<
+              " to " << apf::Mesh::typeName[nType] << ' ' << next << std::endl;
             #endif
             break;
           }
         }
       }
+      // #ifdef RT_DEBUG
+      if (!next) {
+        std::cout << "ERROR: ray halted." << std::endl;
+      }
+      // #endif
     }
     if (e == end) action(m, e);
   }
