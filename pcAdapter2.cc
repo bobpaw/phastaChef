@@ -1199,8 +1199,10 @@ namespace pc {
   }
 
   void processShocksSerial(ph::Input& in, apf::Mesh2* m) {
+    double t0 = PCU_Time();
     defragmentShocksSerial(in, m);
-    std::cout << "Defragmented shocks." << std::endl;
+    double t1 = PCU_Time();
+    std::cout << "Defragmented shocks in " << t1 - t0 << "s." << std::endl;
     apf::writeVtkFiles("shock_defrag.vtk", m);
     Shocks shocks = labelShocksSerial(in, m);
     std::cout << "Labeled " << shocks.size() << " shocks." << std::endl;
