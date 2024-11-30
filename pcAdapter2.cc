@@ -601,7 +601,7 @@ namespace pc {
     const apf::Vector3& dst, RTaction action) {
     apf::Vector3 src = apf::getLinearCentroid(m, start);
     #ifdef RT_DEBUG
-    std::cout << "rayTrace from " << start << src << " to " << end << dst
+    std::cout << "rayTrace: from " << start << src << " to " << end << dst
       << std::endl;
     #endif
     apf::Vector3 ray = (dst - src).normalize();
@@ -609,7 +609,7 @@ namespace pc {
     apf::MeshEntity *prev = start, *e = start, *next = nullptr;
     for (; e && e != end; prev = e, e = next, next = nullptr) {
       if (visited.count(e)) {
-        std::cerr << "rayTrace2: loop detected" << std::endl;
+        std::cerr << "rayTrace: loop detected" << std::endl;
         return;
       }
       visited.insert(e);
@@ -821,11 +821,11 @@ namespace pc {
           }
         }
       }
-      // #ifdef RT_DEBUG
+      #ifdef RT_DEBUG
       if (!next) {
-        std::cout << "ERROR: ray halted." << std::endl;
+        std::cerr << "rayTrace: ray halted." << std::endl;
       }
-      // #endif
+      #endif
     }
     if (e == end) action(m, e);
   }
