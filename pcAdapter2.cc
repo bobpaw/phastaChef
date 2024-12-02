@@ -406,49 +406,57 @@ namespace pc {
    *
    * @param m An APF mesh.
    * @param dim The dimension to search through.
+   * @param bridgeDim The dimension to bridge through.
    * @param e The starting element.
    * @param check A callable argument that determines what to do for a given
    *              entity.
    * @param action The action to perform on entities where `check()` returns
-                   BFSresult::ACT.
+   *               BFSresult::ACT.
+   * @pre dim != bridgeDim
    */
-  void serialBFS(apf::Mesh* m, int dim, int bridgeDim, apf::MeshEntity* e, BFScheck check,
-                 BFSaction action) {
+  void serialBFS(apf::Mesh* m, int dim, int bridgeDim, apf::MeshEntity* e,
+    BFScheck check, BFSaction action) {
     PCU_DEBUG_ASSERT(dim != bridgeDim);
-
     std::set<apf::MeshEntity*> visited;
+    std::set<apf::MeshEntity*> bridged;
     BFSarg arg = (BFSarg){m, e, e, 0, 0};
 
     int component = 0, distance = 0;
-		std::queue<apf::MeshEntity*> Q, Q_next;
+    std::queue<apf::MeshEntity*> Q, Q_bridge;
 
-		// BFS loop.
-		for (Q.push(e); !Q.empty();) {
-			// Mark element as visited.
-			visited.insert(Q.front());
+    // BFS loop.
+    for (Q.push(e); !Q.empty();) {
+      // Mark element as visited.
+      visited.insert(Q.front());
 
-			// Setup BFSarg.
-			arg.e = Q.front();
-			arg.distance = distance;
+      // Setup BFSarg.
+      arg.e = Q.front();
+      arg.distance = distance;
 
-			BFSresult br = check(arg);
-			if (br == BFSresult::BREAK) {
-				break;
-			} else if (br == BFSresult::ACT) {
-				action(arg);
-
-				apf::Adjacent neighbors;
-				apf::getBridgeAdjacent(m, Q.front(), bridgeDim, dim, neighbors);
-				for (size_t i = 0; i < neighbors.size(); ++i) {
-					if (visited.find(neighbors[i]) == visited.end()) {
-						Q_next.push(neighbors[i]);
-					}
-				}
+      BFSresult br = check(arg);
+      if (br == BFSresult::BREAK) {
+        break;
+      } else if (br == BFSresult::ACT) {
+        action(arg);
+        apf::Adjacent bridges;
+        m->getAdjacent(Q.front(), bridgeDim, bridges);
+        for (size_t i = 0; i < bridges.size(); ++i) {
+          if (bridged.count(bridges[i]) == 0) {
+            bridged.insert(bridges[i]);
+            Q_bridge.push(bridges[i]);
+          }
+        }
       }
 
       Q.pop();
       if (Q.empty()) {
-        Q.swap(Q_next);
+        for (;!Q_bridge.empty(); Q_bridge.pop()) {
+          apf::Adjacent neighbors;
+          m->getAdjacent(Q_bridge.front(), dim, neighbors);
+          for (size_t i = 0; i < neighbors.size(); ++i) {
+            if (visited.count(neighbors[i]) == 0) Q.push(neighbors[i]);
+          }
+        }
         ++distance;
       }
     }
