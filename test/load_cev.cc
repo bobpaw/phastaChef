@@ -54,6 +54,7 @@ int main(int argc, char* argv[]) {
     apf::SCALAR, apf::getConstant(3));
   // Read CSV file.
   std::vector<apf::Vector3> shock_pts = test::readCSVPoints(argv[4]);
+  size_t shock_pts_ct = shock_pts.size();
   // Map CSV data to apf::MeshEntity*.
   size_t hits = 0;
   double tol = 1e-4;
@@ -74,7 +75,7 @@ int main(int argc, char* argv[]) {
     apf::setScalar(Shock_Param, e, 0, sp);
   }
   apf_mesh->end(it);
-  std::cout << "Matched " << hits << '/' << shock_pts.size() << " centroids"
+  std::cout << "Matched " << hits << '/' << shock_pts_ct << " centroids"
     << std::endl;
   // Write field.
   std::vector<test::FieldRow> rows;
