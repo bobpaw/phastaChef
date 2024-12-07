@@ -1,3 +1,4 @@
+#include <functional>
 #include <iostream>
 #include <PCU.h>
 #include <lionPrint.h>
@@ -12,7 +13,7 @@
 
 namespace pc {
   // Private test target.
-  void rayTrace(apf::Mesh* m, apf::MeshEntity* start, apf::MeshEntity* end, std::function<void(apf::Mesh* m, apf::MeshEntity* e)>);
+  void rayTrace(apf::Mesh* m, apf::MeshEntity* start, apf::MeshEntity* end, std::function<bool(apf::Mesh* m, apf::MeshEntity* e)>);
 }
 
 apf::Mesh2* createMesh(void) {
@@ -104,6 +105,7 @@ void testRay(apf::Mesh* m, const char* fieldname, int start_id, int end_id, cons
       exit(EXIT_FAILURE);
     }
     ++step;
+    return true;
   });
   if (step != steps.size()) {
     std::cerr << "ERROR: Ray " << fieldname << " stopped at step " << step << std::endl;
