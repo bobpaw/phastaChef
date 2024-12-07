@@ -15,6 +15,7 @@
 #include <PCU.h>
 #include <pcu_util.h>
 
+#include <SimAdvMeshing.h>
 #include <SimPartitionedMesh.h>
 
 #include "../pcShockParam.h"
@@ -22,19 +23,22 @@
 
 int main(int argc, char* argv[]) {
   // Initialize parallelism.
-  MPI_Init(&argc, &argv);
+  SimPartitionedMesh_start(&argc, &argv); // MPI_Init
   PCU_Comm_Init();
-  // Enable SCOREC library output.
-  lion_set_verbosity(1);
   // Check arguments.
   if (argc != 6) {
     std::cout << "USAGE: " << argv[0] << " <nat_model.x_t> <sim_model.smd> "
-      "<sim_mesh.sms> <shock_lcs.csv> <out_mesh.sms>" << std::endl;
+      "<sim_mesh.sms> <shock_lcs.csv> <Shock_Param.csv>" << std::endl;
     PCU_Comm_Free();
-    MPI_Finalize();
+    SimPartitionedMesh_stop();
     return 1;
   }
+  // Enable output.
+  lion_set_verbosity(1);
+  Sim_logOn("sim.log");
   // Initialize Simmetrix.
+  MS_init();
+  SimAdvMeshing_start();
   gmi_register_sim();
   gmi_sim_start();
   Sim_readLicenseFile(0);
@@ -52,17 +56,18 @@ int main(int argc, char* argv[]) {
   std::vector<apf::Vector3> shock_pts = test::readCSVPoints(argv[4]);
   // Map CSV data to apf::MeshEntity*.
   size_t hits = 0;
-  double tol = 10e-3;
+  double tol = 1e-4;
   apf::MeshIterator* it = apf_mesh->begin(3);
   for (apf::MeshEntity* e; e = apf_mesh->iterate(it);) {
     apf::Vector3 lc = apf::getLinearCentroid(apf_mesh, e);
-    lc = lc * 1000;
+    // lc = lc * 1000;
     double sp = pc::ShockParam::NONE;
     for (size_t i = 0; i < shock_pts.size(); ++i) {
       apf::Vector3 d = shock_pts[i] - lc;
       if (d * d < tol * tol) {
         ++hits;
         sp = pc::ShockParam::SHOCK;
+        shock_pts.erase(shock_pts.begin() + i);
         break;
       }
     }
@@ -80,16 +85,19 @@ int main(int argc, char* argv[]) {
     rows.emplace_back(sp, lc);
   }
   apf_mesh->end(it);
-  test::writeCSVField("Shock_Param.csv", "Shock_Param", rows);
+  test::writeCSVField(argv[5], "Shock_Param", rows);
   // Write VTK file.
   apf::writeVtkFiles("load_cev.vtk", apf_mesh);
   // Cleanup.
   apf::destroyMesh(apf_mesh);
   M_release(sim_mesh);
   gmi_destroy(gmodel);
+  SimAdvMeshing_stop();
   gmi_sim_stop();
   Sim_unregisterAllKeys();
+  MS_exit();
+  Sim_logOff();
   PCU_Comm_Free();
-  MPI_Finalize();
+  SimPartitionedMesh_stop();
   return 0;
 }

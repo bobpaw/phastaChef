@@ -14,6 +14,7 @@
 #include <pcu_util.h>
 #include <phInput.h>
 
+#include <SimAdvMeshing.h>
 #include <SimPartitionedMesh.h>
 
 #include "csv.h"
@@ -24,26 +25,29 @@ namespace pc {
 
 int main(int argc, char* argv[]) {
   // Initialize parallelism.
-  MPI_Init(&argc, &argv);
+  SimPartitionedMesh_start(&argc, &argv); // MPI_Init()
   PCU_Comm_Init();
-  // Enable SCOREC library output.
-  lion_set_verbosity(1);
   // Check arguments.
-  if (argc != 3) {
+  if (argc != 4) {
     std::cout << "USAGE: " << argv[0] << " <nat_model.x_t> <sim_model.smd> "
       "<sim_mesh.sms>" << std::endl;
     PCU_Comm_Free();
     MPI_Finalize();
     return 1;
   }
+  // Enable SCOREC library output.
+  lion_set_verbosity(1);
+  Sim_logOn("sim.log");
   // Initialize Simmetrix.
+  MS_init();
+  SimAdvMeshing_start();
   gmi_register_sim();
   gmi_sim_start();
   Sim_readLicenseFile(0);
   // Read geometry.
   gmi_model* gmodel = gmi_sim_load(argv[1], argv[2]);
   // Read mesh.
-  pParMesh sim_mesh = PM_load(argv[2], gmi_export_sim(gmodel), nullptr);
+  pParMesh sim_mesh = PM_load(argv[3], gmi_export_sim(gmodel), nullptr);
   // Create mesh wrapper.
   apf::Mesh2* apf_mesh = apf::createMesh(sim_mesh);
   apf::printStats(apf_mesh);
@@ -77,9 +81,12 @@ int main(int argc, char* argv[]) {
   apf::destroyMesh(apf_mesh);
   M_release(sim_mesh);
   gmi_destroy(gmodel);
+  SimAdvMeshing_stop();
   gmi_sim_stop();
   Sim_unregisterAllKeys();
+  MS_exit();
+  Sim_logOff();
   PCU_Comm_Free();
-  MPI_Finalize();
+  SimPartitionedMesh_stop(); // MPI_Finalize()
   return 0;
 }
