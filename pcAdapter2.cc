@@ -1004,6 +1004,42 @@ namespace pc {
     }
   }
 
+	/**
+   * @brief Sort shocks in descending order by size and remove sets which
+   * exceed retention percentage (% of total shock elements).
+   *
+   * @param in PHASTA input config.
+   * @param m APF mesh.
+   * @param shocks A collection of shocks which are each collections of entities.
+   * @param retention The percentage of shocks to remain.
+   */
+  void cutoffShocksSerial(const ph::Input& in, apf::Mesh2* m, Shocks& shocks, int retention = 95) {
+    apf::Field* Shock_Param = m->findField("Shock_Param");
+    apf::Field* pc_cs_bfs = m->findField("pc_cs_bfs");
+
+    std::stable_sort(shocks.begin(), shocks.end(), [](const auto& a, const auto& b) -> bool {
+      return a.size() > b.size();
+    });
+
+    int total_size = 0;
+    for (const auto& shock : shocks) {
+      total_size += shock.size();
+    }
+
+    int goal = total_size * retention / 100, sum = 0;
+    auto it = shocks.begin();
+    for (;it != shocks.end && sum < goal; ++it) {
+      sum += it->size();
+    }
+    for (auto it2 = it; it2 != shocks.end(); ++it2) {
+      for (auto it3 = it2->begin(); it3 != it2->end(); ++it3) {
+        apf::setScalar(Shock_Param, *it3, 0, ShockParam::NONE);
+        apf::setVector(pc_cs_bfs, *it3, 0, {-1,-1,-1});
+      }
+    }
+    shocks.erase(it, shocks.end());
+  }
+
   /**
    * @brief Use planarity to segment shocks.
    * 
